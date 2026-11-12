@@ -1,0 +1,11 @@
+Based on the supplied TheNightShift.zip.
+
+Visual changes: sculpted cracked face with mouth deformation; fine hair strands; textured torn clothing and shaped limbs; staged capture head/jaw snap; lower dragging camera with uneven impacts and a backward-looking ghost.
+
+Mechanics preserved: original server, map, controls, AI, speeds, capture durations, rescue windows, duties, difficulty and networking. Client-only changes in ghostmodel.js, main.js and audio.js.
+
+Validation: 91 original multiplayer/gameplay tests passed, 0 failed. Browser game startup and ghost visual review completed without console errors.
+
+Audio: approved processed near-catch recording integrated. It plays when a visible pursuing ghost is within 5 metres, intensifies with proximity, and fades on capture, retreat, loss of line of sight or leaving the round. No repeated starts within one encounter. Existing heartbeat and capture scream retained; separate replacement catch sound awaiting user file.
+
+Run: extract, then double-click start.bat (Node.js 18+ required).

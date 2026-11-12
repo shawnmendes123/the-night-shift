@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Night Shift</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+<script type="importmap">{ "imports": { "three": "/vendor/three.module.js", "three/addons/": "/vendor/addons/" } }</script>
+</head>
+<body>
+<canvas id="view"></canvas>
+
+<!-- MENU -->
+<section id="menu" class="screen">
+  <div class="sheet">
+    <p class="stamp">St. Verity General &middot; East Wing &middot; closed 1987</p>
+    <h1>The Night Shift</h1>
+    <p class="lede">Finish your duties. Find out who is still ringing for a nurse. Clock out alive.</p>
+    <label class="field">Name on your badge<input id="name" maxlength="16" autocomplete="off" spellcheck="false" placeholder="Your name"></label>
+    <div class="row">
+      <button id="btnHost" class="primary">Host a shift</button>
+      <span class="or">or</span>
+      <input id="code" maxlength="4" autocomplete="off" spellcheck="false" placeholder="CODE">
+      <button id="btnJoin">Join</button>
+    </div>
+    <p id="menuErr" class="err"></p>
+    <p class="fine">2&ndash;5 players, online co-op. Headphones strongly recommended.</p>
+  </div>
+</section>
+
+<!-- LOBBY -->
+<section id="lobby" class="screen hidden">
+  <div class="sheet">
+    <p class="stamp">Staff sign-in sheet &middot; nights</p>
+    <h2>Shift <span id="lobbyCode"></span></h2>
+    <p class="fine">Friends join with this code, or open: <span id="lobbyLink" class="link"></span> <button id="btnCopy" class="mini">Copy link</button></p>
+    <ol id="roster"></ol>
+    <div class="field">Difficulty
+      <div id="diffs" class="seg"></div>
+      <p id="diffNote" class="fine"></p>
+    </div>
+    <div class="field">Graphics
+      <div id="quals" class="seg"><button data-q="high">High</button><button data-q="medium">Medium</button><button data-q="low">Low</button></div>
+      <p id="qualNote" class="fine"></p>
+    </div>
+    <div class="field">Mouse sensitivity <span id="sensVal"></span>
+      <input id="sens" type="range" min="0.3" max="2.5" step="0.05">
+    </div>
+    <div class="row">
+      <button id="btnStart" class="primary">Start the shift</button>
+      <span id="lobbyNote" class="fine"></span>
+    </div>
+    <details><summary>Controls</summary>
+      <p class="fine keys"><b>WASD</b> move &middot; <b>Shift</b> run (loud) &middot; <b>C</b> crouch (silent) &middot; <b>E</b> use / hide / hold to work &middot; <b>F</b> torch &middot; <b>G</b> drop item &middot; <b>Click</b> throw a bottle &middot; <b>Space</b> hold breath while hiding &middot; <b>Tab</b> evidence &middot; <b>F3</b> frame rate &middot; <b>Esc</b> free the mouse</p>
+    </details>
+  </div>
+</section>
+
+<!-- HUD -->
+<div id="hud" class="hidden">
+  <div id="clip">
+    <div class="clipHead"><span>Shift duties</span><span id="dutyCount"></span></div>
+    <ul id="duties"></ul>
+    <div class="clipHead"><span>The patient</span><span id="clueCount"></span></div>
+    <ul id="objective"></ul>
+    <ul id="evidence" class="hidden"></ul>
+    <p class="tabHint">Tab: evidence</p>
+  </div>
+  <div id="topRight">
+    <div id="clock">00:00</div>
+    <div id="clockSub"></div>
+    <ul id="team"></ul>
+  </div>
+  <div id="cross"></div>
+  <div id="fps" class="hidden"></div>
+  <div id="prompt"><span id="promptText"></span><div id="promptBar"><i></i></div></div>
+  <div id="toasts"></div>
+  <div id="note" class="hidden"><h4 id="noteTitle"></h4><pre id="noteBody"></pre><p class="fine">E to put down</p></div>
+  <div id="status">
+    <div id="held"></div>
+    <div class="bar" id="staminaBar"><i></i></div>
+    <div id="modeTxt"></div>
+  </div>
+  <div id="hideFx" class="hidden"><div id="breath"><span>BREATH</span><div class="bar"><i id="breathFill"></i></div><span id="breathHint">Hold Space to hold your breath</span></div></div>
+  <div id="spectate" class="hidden"></div>
+  <div id="paused" class="hidden"><div><h3>Click to return to the ward</h3><p class="fine keys"><b>WASD</b> move &middot; <b>Shift</b> run &middot; <b>C</b> crouch &middot; <b>E</b> use &middot; <b>F</b> torch &middot; <b>G</b> drop &middot; <b>Click</b> throw &middot; <b>Space</b> hold breath &middot; <b>Tab</b> evidence</p></div></div>
+</div>
+<div id="fade"></div>
+
+<!-- END -->
+<section id="end" class="screen hidden">
+  <div class="sheet">
+    <p class="stamp">Incident report</p>
+    <h2 id="endTitle"></h2>
+    <p id="endText" class="lede"></p>
+    <ol id="endRoster"></ol>
+    <p id="endStats" class="fine"></p>
+    <div class="row"><button id="btnAgain" class="primary">Back to the sign-in sheet</button><span id="endNote" class="fine"></span></div>
+  </div>
+</section>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

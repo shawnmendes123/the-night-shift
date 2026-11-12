@@ -1,0 +1,10 @@
+# One-click Render setup: New > Blueprint, pick this repository.
+services:
+  - type: web
+    name: the-night-shift
+    runtime: node
+    region: singapore
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health

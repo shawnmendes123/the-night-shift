@@ -1,0 +1,13 @@
+{
+  "name": "the-night-shift",
+  "version": "0.1.0",
+  "description": "The Night Shift - 2-5 player online co-op survival horror (browser + Node server)",
+  "type": "module",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node tools/bot-test.js"
+  },
+  "engines": { "node": ">=18" },
+  "dependencies": { "ws": "^8.18.0" }
+}
