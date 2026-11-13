@@ -52,7 +52,7 @@
       <span id="lobbyNote" class="fine"></span>
     </div>
     <details><summary>Controls</summary>
-      <p class="fine keys"><b>WASD</b> move &middot; <b>Shift</b> run (loud) &middot; <b>C</b> crouch (silent) &middot; <b>E</b> use / hide / hold to work &middot; <b>F</b> torch &middot; <b>G</b> drop item &middot; <b>Click</b> throw a bottle &middot; <b>Space</b> hold breath while hiding &middot; <b>Tab</b> evidence &middot; <b>F3</b> frame rate &middot; <b>Esc</b> free the mouse</p>
+      <p class="fine keys"><b>WASD</b> move &middot; <b>Shift</b> run (loud) &middot; <b>C</b> crouch (silent) &middot; <b>E</b> use / hide / hold to work &middot; <b>F</b> torch &middot; <b>G</b> drop item &middot; <b>Click</b> throw a bottle &middot; <b>Space</b> hold breath while hiding &middot; <b>Tab</b> evidence &middot; <b>M</b> map &middot; <b>F3</b> frame rate &middot; <b>Esc</b> free the mouse</p>
     </details>
   </div>
 </section>
@@ -65,7 +65,7 @@
     <div class="clipHead"><span>The patient</span><span id="clueCount"></span></div>
     <ul id="objective"></ul>
     <ul id="evidence" class="hidden"></ul>
-    <p class="tabHint">Tab: evidence</p>
+    <p class="tabHint">Tab: evidence &middot; M: map</p>
   </div>
   <div id="topRight">
     <div id="clock">00:00</div>
@@ -73,6 +73,7 @@
     <ul id="team"></ul>
   </div>
   <div id="cross"></div>
+  <div id="tracker" class="hidden"><i id="trArrow"></i><span id="trText"></span></div>
   <div id="fps" class="hidden"></div>
   <div id="prompt"><span id="promptText"></span><div id="promptBar"><i></i></div></div>
   <div id="toasts"></div>
@@ -84,7 +85,26 @@
   </div>
   <div id="hideFx" class="hidden"><div id="breath"><span>BREATH</span><div class="bar"><i id="breathFill"></i></div><span id="breathHint">Hold Space to hold your breath</span></div></div>
   <div id="spectate" class="hidden"></div>
-  <div id="paused" class="hidden"><div><h3>Click to return to the ward</h3><p class="fine keys"><b>WASD</b> move &middot; <b>Shift</b> run &middot; <b>C</b> crouch &middot; <b>E</b> use &middot; <b>F</b> torch &middot; <b>G</b> drop &middot; <b>Click</b> throw &middot; <b>Space</b> hold breath &middot; <b>Tab</b> evidence</p></div></div>
+  <div id="paused" class="hidden"><div><h3>Click to return to the ward</h3><p class="fine keys"><b>WASD</b> move &middot; <b>Shift</b> run &middot; <b>C</b> crouch &middot; <b>E</b> use &middot; <b>F</b> torch &middot; <b>G</b> drop &middot; <b>Click</b> throw &middot; <b>Space</b> hold breath &middot; <b>Tab</b> evidence &middot; <b>M</b> map</p></div></div>
+  <button id="btnMap" type="button">Map <b>M</b></button>
+</div>
+<div id="planWrap" class="hidden">
+  <div id="planSheet" role="dialog" aria-label="Floor plan">
+    <div class="planHead"><div><p class="stamp">Fire evacuation plan &middot; night staff copy</p><h3>Floor plan</h3></div><button id="planClose" type="button" class="mini">Close <b>M</b></button></div>
+    <div class="planBody">
+      <canvas id="planCanvas"></canvas>
+      <div class="planSide">
+        <p class="planLbl">Jobs left</p>
+        <ol id="planList"></ol>
+        <p id="planHint" class="fine"></p>
+        <ul class="legend">
+          <li><i class="lg you"></i>You</li><li><i class="lg mate"></i>Teammate</li><li><i class="lg job"></i>Job</li>
+          <li><i class="lg lock"></i>Locked door</li><li><i class="lg base"></i>Basement</li>
+        </ul>
+        <p class="fine">You can still walk (WASD) with the plan open. She is not on it.</p>
+      </div>
+    </div>
+  </div>
 </div>
 <div id="fade"></div>
 <div id="nameScrawl" aria-hidden="true"></div>

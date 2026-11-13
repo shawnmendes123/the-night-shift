@@ -1,7 +1,7 @@
 // One lobby + round. The server is authoritative for everything except player movement.
 import { DIFF, LOUD, MAX_PLAYERS, REACH } from '../shared/config.js';
 import * as M from '../shared/map.js';
-import { Nav } from './nav.js';
+import { Nav } from '../shared/nav.js';
 import { Ghost } from './ghost.js';
 
 const TICK = 1 / 20;

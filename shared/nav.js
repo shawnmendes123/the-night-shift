@@ -1,5 +1,5 @@
 // Grid navigation for the ghost (and for the test bots). 0.5 m cells, A* with line-of-walk smoothing.
-import { SOLID, ROOMS, DOORS, doorBox } from '../shared/map.js';
+import { SOLID, ROOMS, DOORS, doorBox } from './map.js';
 
 const CS = 0.5, W = 80, HH = 70;
 const idx = (cx, cz) => cz * W + cx;

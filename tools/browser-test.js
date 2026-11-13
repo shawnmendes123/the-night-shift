@@ -52,6 +52,16 @@ try {
   await a.waitForFunction(() => window.GhostVoice && window.GhostVoice.ready(), null, { timeout: 30000 });
   const voice = await ev(a, async () => { window.NS.herVoice('test... where are you?', 0.01); await new Promise((r) => setTimeout(r, 1500)); return { live: window.NS.voiceLive() }; });
   ok(voice.live, 'her voice engine loads after the round starts and speaks without errors');
+  await a.keyboard.press('KeyM'); await sleep(500);
+  const mapInfo = await ev(a, () => ({ open: window.NS.S.mapOpen, jobs: document.querySelectorAll('#planList button').length, goals: window.NS.goals().length }));
+  ok(mapInfo.open && mapInfo.jobs >= 6 && mapInfo.jobs === mapInfo.goals, 'M opens the floor plan with every unfinished job listed', JSON.stringify(mapInfo));
+  await a.click('#planList button[data-id="call"]'); await sleep(600);
+  const trk = await ev(a, () => { const r = window.NS.route(); return { track: window.NS.S.track, route: !!r, len: r ? r.len : 0 }; });
+  ok(trk.track === 'call' && trk.route && trk.len > 3, 'clicking a job tracks it and draws a walking route', JSON.stringify(trk));
+  await a.keyboard.press('KeyM'); await sleep(400);
+  ok(await a.isVisible('#tracker'), 'the tracking arrow shows on screen after closing the plan');
+  await ev(a, () => window.NS.track('call')); await sleep(400);
+  ok(!(await a.isVisible('#tracker')), 'clicking the tracked job again stops tracking');
 
   // --- movement with real key presses, seen from the other browser
   await place(a, 4, 15, Math.PI); await place(b, 4, 19, Math.PI); await sleep(600);

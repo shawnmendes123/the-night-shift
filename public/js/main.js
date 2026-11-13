@@ -7,6 +7,7 @@ import { GhostModel } from './ghostmodel.js';
 import { Avatar } from './avatar.js';
 import { Sound } from './audio.js';
 import { makePost } from './post.js';
+import { FloorPlan } from './plan.js';
 
 const $ = (id) => document.getElementById(id);
 const Q = new URLSearchParams(location.search);
@@ -21,10 +22,10 @@ const S = {
   phase: 'menu', ws: null, id: null, code: null, lobby: null, debug: false, quality: Q.get('q') || localStorage.getItem('ns_quality') || null, sens: +(localStorage.getItem('ns_sens') || 1), dyn: 1, showFps: Q.has('fps'),
   world: null, snap: null, cfg: null, diff: 'medium',
   me: { x: 4, z: 18, ry: Math.PI, rx: 0, crouch: false, flash: true, stamina: STAMINA.max, mode: 'still', eye: M.EYE, bob: 0, stepD: 0, winded: false },
-  st: 'a', spot: null, breath: 0, rescued: 0, spec: null, capT: 0, hideLook: { y: 0, x: 0 },
+  mapOpen: false, track: null, st: 'a', spot: null, breath: 0, rescued: 0, spec: null, capT: 0, hideLook: { y: 0, x: 0 },
   g: { x: 0, z: 0, ry: 0, v: 0, a: 'idle', s: 'dormant', speed: 0 }, keys: {}, hold: null, note: false, showEv: false, fade: 0, fadeTo: 0, time: 0, sendT: 0, shake: 0, warn: 0,
 };
-window.NS = { S, THREE, herVoice, voiceLive: () => !!voiceBus };
+window.NS = { S, THREE, herVoice, voiceLive: () => !!voiceBus, goals: () => goals(), openMap: (on) => openMap(on, true), track: (id) => setTrack(id), route: () => route };
 const snaps = []; // recent server snapshots, for smooth interpolation of other players and the ghost
 
 // ====================================================================== renderer / scene
@@ -196,7 +197,7 @@ function show(phase) {
   S.phase = phase;
   for (const id of ['menu', 'lobby', 'end']) $(id).classList.toggle('hidden', id !== phase);
   $('hud').classList.toggle('hidden', phase !== 'game');
-  if (phase !== 'game') { if (document.pointerLockElement) document.exitPointerLock(); S.fadeTo = 0; sound.setDrone(false); }
+  if (phase !== 'game') { openMap(false, true); S.track = null; if (document.pointerLockElement) document.exitPointerLock(); S.fadeTo = 0; sound.setDrone(false); }
 }
 function renderLobby() {
   const L = S.lobby; if (!L) return;
@@ -231,7 +232,7 @@ function startRound(m) {
   if (m.resume && S.phase === 'game' && S.cfg) { snaps.length = 0; S.clk = undefined; applyWorld(m.world); return; }
   sound.init();
   lastSaid = performance.now() - 20000; loadVoice();
-  S.cfg = m.cfg; S.diff = m.diff; S.snap = null; S.spec = null; S.st = 'a'; S.spot = null; S.note = false; S.hold = null; S.capT = 0; S.rescued = 0;
+  S.cfg = m.cfg; S.diff = m.diff; S.snap = null; S.spec = null; S.st = 'a'; S.spot = null; S.note = false; S.hold = null; S.capT = 0; S.rescued = 0; S.track = null; route = null; openMap(false, true);
   Object.assign(S.me, { x: m.you.x, z: m.you.z, ry: m.you.ry, rx: 0, crouch: false, flash: true, stamina: STAMINA.max, mode: 'still', winded: false });
   S.g.v = 0; S.g.s = 'dormant';
   for (const a of avatars.values()) a.dispose(); avatars.clear();
@@ -369,6 +370,112 @@ function onEvent(e) {
   }
 }
 
+
+// ====================================================================== floor plan (M)
+// A fire-evacuation plan of the hospital: you, your team, every unfinished job, and the route to the one you track.
+const plan = new FloorPlan($('planCanvas'));
+let route = null, routeT = 0, listT = 0, curGoals = [];
+const CLUE_SPOTS = { clue_log: "Night log, Nurses' Station", clue_orders: "Doctor's orders, Treatment Room", clue_file: 'Admission file, Records Office' };
+function posOf(pid) {
+  if (pid === S.id) return { x: S.me.x, z: S.me.z };
+  const a = avatars.get(pid); if (a && a.cur) return { x: a.cur.x, z: a.cur.z };
+  const r = S.snap && S.snap.p.find((p) => p[0] === pid); return r ? { x: r[1], z: r[2] } : null;
+}
+function goals() {
+  const w = S.world, out = []; if (!w) return out;
+  const add = (id, label, x, z, urgent) => out.push({ id, label, x, z, urgent: !!urgent });
+  const item = (k) => w.items.find((i) => i.k === k), mine = (it) => it && it.h === S.id;
+  const at = (it) => (it.h ? posOf(it.h) : { x: it.x, z: it.z }) || { x: it.x, z: it.z };
+  const by = (it) => (it && it.h && it.h !== S.id ? ` (${nameOf(it.h)} has it)` : '');
+  const stn = (id) => M.stationById(id), done = (id) => (w.tasks.find((t) => t.id === id) || {}).done;
+  if (S.snap) for (const p of S.snap.p) if (p[0] !== S.id && p[7] === 'c') { const q = posOf(p[0]); if (q) add('rescue:' + p[0], `Pull ${nameOf(p[0])} free`, q.x, q.z, true); }
+  if (w.exitOpen) { const d = M.doorPos(M.doorById('exit')); add('exit', 'Clock out: the staff exit', d.x, d.z - 0.7, true); }
+  for (const t of w.tasks) {
+    if (t.done) continue;
+    if (t.id === 'key') { const it = item('key'); if (!it) continue; if (mine(it)) { const d = M.doorPos(M.doorById('stairs')); add('key', 'Unlock the basement stairs', d.x, d.z - 0.6); } else { const q = at(it); add('key', 'Basement key, Records Office' + by(it), q.x, q.z); } }
+    else if (t.id === 'fuse') { const it = item('fuse'); if (it) { const q = at(it); add('fuse', 'Spare fuse, Boiler Room' + by(it), q.x, q.z); } }
+    else if (t.id === 'power') {
+      const it = item('fuse');
+      if (!w.fuseFitted && it && !mine(it) && done('fuse')) { const q = at(it); add('power', 'The fuse' + (by(it) || ' (dropped)'), q.x, q.z); }
+      else add('power', w.fuseFitted || mine(it) ? 'Fit the fuse: Storage breaker' : 'Storage breaker (needs the fuse)', M.BREAKER_STAND.x, M.BREAKER_STAND.z);
+    } else if (t.id === 'chart') {
+      const it = item('chart'); if (!it) continue;
+      const n = +((it.txt || '').match(/Bed (\d)/) || [])[1];
+      if (mine(it) && n) { const s2 = stn('slot' + n); add('chart', `Chart to Ward A, bed ${n}`, s2.x, s2.z); } else { const q = at(it); add('chart', "Patient chart, Nurses' Station" + by(it), q.x, q.z); }
+    } else if (t.id === 'meds') {
+      const it = item('meds'); if (!it) continue;
+      if (mine(it)) { const s2 = stn('medcab'); add('meds', 'Medicine case into the Treatment cabinet', s2.x, s2.z); } else { const q = at(it); add('meds', 'Medicine case' + by(it), q.x, q.z); }
+    } else if (t.id === 'call') { const s2 = stn('call'); add('call', 'Answer the call light, Room 3', s2.x, s2.z); }
+  }
+  if (!w.mystery) {
+    const has = (id) => w.clues.some((c) => c.id === id);
+    for (const id of ['clue_log', 'clue_orders', 'clue_file']) if (!has(id)) { const s2 = stn(id); add(id, 'Evidence: ' + CLUE_SPOTS[id], s2.x, s2.z); }
+    const doll = item('doll');
+    if (doll && mine(doll)) add('doll', 'Morgue drawers: find her name', 33, 32.1);
+    else if (doll && (has('clue_log') || has('clue_orders') || has('doll'))) { const q = at(doll); add('doll', 'The doll' + by(doll), q.x, q.z); }
+  }
+  out.forEach((q, i) => { q.n = i + 1; });
+  return out;
+}
+function setTrack(id) { S.track = S.track === id ? null : id; route = null; routeT = 0; sound.ui('pick'); renderPlanList(true); }
+function openMap(on, quiet) {
+  if (on && S.phase !== 'game') return;
+  if (S.mapOpen === on) return;
+  S.mapOpen = on; $('planWrap').classList.toggle('hidden', !on); $('btnMap').classList.toggle('hidden', on);
+  if (on) { if (document.pointerLockElement) document.exitPointerLock(); sound.ui('paper'); curGoals = goals(); renderPlanList(true); }
+  else if (!quiet && !NOLOCK && S.phase === 'game') canvas.requestPointerLock?.();
+}
+function renderPlanList(force) {
+  if (!S.mapOpen) return;
+  const now = performance.now(); if (!force && now - listT < 1000) return; listT = now;
+  plan.setDoors(sound.doors || {});
+  const alive = S.st === 'a' || S.st === 'h' || S.st === 'c';
+  const sig = curGoals.map((q) => q.id + '|' + q.label + '|' + q.urgent).join(';') + '#' + S.track;
+  const list = $('planList');
+  if (list.dataset.sig !== sig) {
+    list.dataset.sig = sig;
+    list.innerHTML = curGoals.map((q) => `<li><button type="button" data-id="${esc(q.id)}" class="${S.track === q.id ? 'on' : ''}${q.urgent ? ' urgent' : ''}"><i>${q.n}</i><span>${esc(q.label)}<small></small></span></button></li>`).join('') || '<li class="none">Nothing left on the list.</li>';
+  }
+  for (const q of curGoals) { // distances change as you walk: update text only, so clicks never land on a replaced button
+    const r = alive ? plan.route(S.me.x, S.me.z, q.x, q.z) : null, el = list.querySelector(`button[data-id="${CSS.escape(q.id)}"] small`);
+    if (el) el.textContent = (r ? `${Math.round(r.len)} m${r.blocked ? ' - locked door on the way' : ''}` : '') + (S.track === q.id ? ' - tracking' : '');
+  }
+  $('planHint').textContent = S.track ? 'Tracking. Follow the red arrow at the top of your screen. Click it again to stop.' : 'Click a job, here or on the plan, to track it.';
+}
+$('planList').addEventListener('click', (e) => { const b = e.target.closest('button[data-id]'); if (b) setTrack(b.dataset.id); });
+$('planCanvas').addEventListener('click', (e) => { const r = e.currentTarget.getBoundingClientRect(), id = plan.hitTest(e.clientX - r.left, e.clientY - r.top); if (id) setTrack(id); });
+$('planCanvas').addEventListener('mousemove', (e) => { const r = e.currentTarget.getBoundingClientRect(); e.currentTarget.style.cursor = plan.hitTest(e.clientX - r.left, e.clientY - r.top) ? 'pointer' : 'default'; });
+$('planClose').addEventListener('click', () => openMap(false));
+$('planWrap').addEventListener('click', (e) => { if (e.target === e.currentTarget) openMap(false); });
+$('btnMap').addEventListener('click', () => openMap(!S.mapOpen));
+function planTick(dt) {
+  routeT -= dt;
+  if (routeT <= 0) {
+    routeT = 0.35; curGoals = goals();
+    if (S.track && !curGoals.some((q) => q.id === S.track)) { S.track = null; route = null; toast('Done. Press M to pick your next job.'); renderPlanList(true); }
+    const q = S.track && curGoals.find((g) => g.id === S.track);
+    if (q && (S.st === 'a' || S.st === 'h')) { plan.setDoors(sound.doors || {}); route = plan.route(S.me.x, S.me.z, q.x, q.z); route && (route.goal = q); } else route = null;
+  }
+  if (S.mapOpen) {
+    renderPlanList(false);
+    const mates = [];
+    if (S.snap) for (const p of S.snap.p) { if (p[0] === S.id || p[7] === 'd' || p[7] === 'e') continue; const q = posOf(p[0]); if (q) mates.push({ name: nameOf(p[0]), x: q.x, z: q.z, caught: p[7] === 'c' }); }
+    const w = S.world || {};
+    plan.draw({ me: S.st === 'a' || S.st === 'h' || S.st === 'c' ? { x: S.me.x, z: S.me.z, ry: S.me.ry } : null, mates, goals: curGoals, track: S.track, route, doors: sound.doors || {}, exitOpen: w.exitOpen, power: w.power, t: S.time });
+  }
+}
+function updateTracker() {
+  const show = !!(route && route.goal && !S.mapOpen && (S.st === 'a' || S.st === 'h') && S.phase === 'game');
+  setCls('tracker', 'hidden', !show); if (!show) return;
+  let nx = route.goal.x, nz = route.goal.z; // aim at the next corner of the route, not through walls
+  for (const p of route.pts) if (Math.hypot(p.x - S.me.x, p.z - S.me.z) > 1.2) { nx = p.x; nz = p.z; break; }
+  const dx = nx - S.me.x, dz = nz - S.me.z, ry = S.st === 'h' ? S.me.ry + S.hideLook.y : S.me.ry;
+  const fwd = dx * Math.sin(ry) + dz * Math.cos(ry), right = -dx * Math.cos(ry) + dz * Math.sin(ry);
+  setStyle($('trArrow'), 'trArrow', 'transform', `rotate(${Math.round((Math.atan2(right, fwd) * 180) / Math.PI)}deg)`);
+  const left = Math.round(route.len);
+  setText('trText', `${route.goal.label.replace(/ \(.*\)$/, '')} · ${left < 2 ? 'here' : left + ' m'}${route.blocked ? ' · locked door on the way' : ''}`);
+}
+
 // ====================================================================== input
 function locked() { return NOLOCK || document.pointerLockElement === canvas; }
 canvas.addEventListener('click', () => { if (S.phase === 'game' && !locked()) canvas.requestPointerLock?.(); });
@@ -388,6 +495,8 @@ document.addEventListener('keydown', (e) => {
   if (S.phase !== 'game') return;
   if (e.code === 'F3') { e.preventDefault(); S.showFps = !S.showFps; return; }
   if (e.code === 'Tab') { e.preventDefault(); if (!e.repeat) { S.showEv = !S.showEv; $('evidence').classList.toggle('hidden', !S.showEv); } return; }
+  if (e.code === 'KeyM') { if (!e.repeat) openMap(!S.mapOpen); return; }
+  if (e.code === 'Escape' && S.mapOpen) { openMap(false, true); return; }
   if (e.repeat) return;
   S.keys[e.code] = true;
   if (e.code === 'Space') e.preventDefault();
@@ -495,7 +604,7 @@ function updateSelf(dt) {
     S.breath = row[9]; S.rescued = row[11];
     if (st === 'c') { me.x = lerp(me.x, row[1], Math.min(1, dt * 12)); me.z = lerp(me.z, row[2], Math.min(1, dt * 12)); }
   }
-  if (S.st === 'a' && locked() && !S.note) {
+  if (S.st === 'a' && (locked() || S.mapOpen) && !S.note) {
     const f = (k.KeyW || k.ArrowUp ? 1 : 0) - (k.KeyS || k.ArrowDown ? 1 : 0), s = (k.KeyD ? 1 : 0) - (k.KeyA ? 1 : 0);
     const moving = f || s;
     const wantRun = (k.ShiftLeft || k.ShiftRight) && moving && !me.crouch && !me.winded && f >= 0;
@@ -615,7 +724,8 @@ function updateHud(dt, t) {
   const spec = (S.st === 'd' || S.st === 'e');
   setCls('spectate', 'hidden', !spec);
   if (spec) setHtml('spectate', `${S.st === 'e' ? 'You clocked out' : 'You were taken'}<small>${S.spec ? `Watching ${esc(nameOf(S.spec))} - click or A/D to switch` : 'No one left to watch'}</small>`);
-  setCls('paused', 'hidden', locked() || S.phase !== 'game');
+  setCls('paused', 'hidden', locked() || S.mapOpen || S.phase !== 'game');
+  updateTracker();
   setStyle($('cross'), 'cross', 'opacity', S.st === 'a' ? '1' : '0');
   setCls('fps', 'hidden', !S.showFps);
   if (S.showFps) setText('fps', `${S.fps || '--'} fps  ·  ${S.quality}  ·  ${Math.round(S.dyn * 100)}% res`);
@@ -697,6 +807,7 @@ function frame(now) {
     sound.update(dt, { x: G.x, y: M.floorY(G.x, G.z), z: G.z, v: G.v, a: G.a, s: G.s }, cam.gd, S.world.callOn, { x: 17.5, y: 1.5, z: 4 }, Math.max(G.v > 0.3 && (S.st === 'a' || S.st === 'h') ? clamp(1 - cam.gd / 20, 0, 1) : 0, S.warn > 0 ? 0.9 : 0, S.st === 'c' ? 1 : 0));
     world.update(dt, t, cam, G);
     updateHud(dt, t);
+    planTick(dt);
     perfTick(dt);
     // When she is near but has not found you, she sometimes whispers your name. Rarely, so it stays frightening.
     if ((S.st === 'a' || S.st === 'h') && G.v > 0.3 && cam.gd < 12 && !['chase', 'notice', 'grab', 'drag', 'take'].includes(G.s) && now - lastSaid > 45000 && Math.random() < dt / 25) herVoice(myName() + '...', 0.5);

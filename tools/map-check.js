@@ -1,5 +1,5 @@
 // Verifies every station, item, hiding spot, waypoint and exit is reachable from the spawn.
-import { Nav } from '../server/nav.js';
+import { Nav } from '../shared/nav.js';
 import * as M from '../shared/map.js';
 const nav = new Nav();
 let bad = 0;
