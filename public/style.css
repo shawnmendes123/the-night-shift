@@ -112,5 +112,8 @@ summary { cursor: pointer; text-transform: uppercase; letter-spacing: .12em; fon
 #reconnect h3 { font-family: var(--cond); font-size: 34px; letter-spacing: .1em; text-transform: uppercase; margin: 0 0 10px; }
 #reconnect p { margin: 4px 0; }
 #reconnect .fine { color: #b9c2b8; }
+#nameScrawl { position: fixed; left: 0; right: 0; bottom: 14%; z-index: 16; text-align: center; pointer-events: none; font-family: "Segoe Print", "Bradley Hand", "Comic Sans MS", cursive; font-size: clamp(40px, 9vw, 130px); color: #9e1b14; text-shadow: 0 0 24px #000; opacity: 0; transform: rotate(-5deg); }
+#nameScrawl.show { animation: scrawl 2.6s ease forwards; }
+@keyframes scrawl { 0% { opacity: 0; letter-spacing: .6em; } 12% { opacity: 1; letter-spacing: .08em; } 75% { opacity: 1; } 100% { opacity: 0; } }
 #fade { position: fixed; inset: 0; background: #000; opacity: 0; pointer-events: none; z-index: 15; }
 @media (prefers-reduced-motion: reduce) { .toast { animation-duration: 5.5s; } .sheet { transform: none; } }

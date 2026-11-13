@@ -223,13 +223,14 @@ $('name').addEventListener('keydown', (e) => { if (e.key === 'Enter') ($('code')
 $('btnStart').onclick = () => send({ t: 'start' });
 $('btnCopy').onclick = () => { navigator.clipboard?.writeText(location.origin + '/?room=' + S.code); $('btnCopy').textContent = 'Copied'; setTimeout(() => ($('btnCopy').textContent = 'Copy link'), 1500); };
 $('btnAgain').onclick = () => send({ t: 'lobby' });
-$('name').value = localStorage.getItem('ns_name') || '';
+$('name').value = (Q.get('name') || '').slice(0, 16) || localStorage.getItem('ns_name') || ''; // ?name= comes from the briefing
 if (Q.get('room')) $('code').value = Q.get('room').toUpperCase().slice(0, 4);
 
 // ====================================================================== round start / end
 function startRound(m) {
   if (m.resume && S.phase === 'game' && S.cfg) { snaps.length = 0; S.clk = undefined; applyWorld(m.world); return; }
   sound.init();
+  lastSaid = performance.now() - 20000; try { speechSynthesis.getVoices(); } catch {}
   S.cfg = m.cfg; S.diff = m.diff; S.snap = null; S.spec = null; S.st = 'a'; S.spot = null; S.note = false; S.hold = null; S.capT = 0; S.rescued = 0;
   Object.assign(S.me, { x: m.you.x, z: m.you.z, ry: m.you.ry, rx: 0, crouch: false, flash: true, stamina: STAMINA.max, mode: 'still', winded: false });
   S.g.v = 0; S.g.s = 'dormant';
@@ -289,6 +290,19 @@ function toast(text, cls = '') {
 function showNote(title, body) { S.note = true; $('noteTitle').textContent = title; $('noteBody').textContent = body; $('note').classList.remove('hidden'); sound.ui('paper'); }
 function closeNote() { S.note = false; $('note').classList.add('hidden'); }
 const nameOf = (id) => (S.lobby && S.lobby.players.find((p) => p.id === id) || {}).name || 'Someone';
+// She speaks your name. Only you hear it: speech plays on your own machine, never your teammates'.
+const myName = () => (S.id && nameOf(S.id) !== 'Someone' ? nameOf(S.id) : $('name').value.trim() || 'nurse').toLowerCase();
+let lastSaid = 0;
+function herVoice(text, vol = 1, rate = 0.55) {
+  try {
+    if (!('speechSynthesis' in window)) return;
+    const u = new SpeechSynthesisUtterance(text); u.pitch = 0.05; u.rate = rate; u.volume = vol;
+    const vs = speechSynthesis.getVoices();
+    const v = vs.find((v) => /^en/i.test(v.lang) && /female|zira|samantha|karen|moira|tessa|fiona|victoria|serena/i.test(v.name)) || vs.find((v) => /^en/i.test(v.lang));
+    if (v) u.voice = v; speechSynthesis.cancel(); speechSynthesis.speak(u); lastSaid = performance.now();
+  } catch {}
+}
+function scrawlName() { const el = $('nameScrawl'); el.textContent = myName().toUpperCase(); el.classList.remove('show'); void el.offsetWidth; el.classList.add('show'); }
 
 function onEvent(e) {
   const fy = (x, z) => M.floorY(x, z) + 1.2, G = S.g, gy = M.floorY(G.x, G.z) + 1.4;
@@ -311,15 +325,15 @@ function onEvent(e) {
     case 'shatter': sound.shatter(e.x, fy(e.x, e.z) - 1, e.z); break;
     case 'hide': case 'unhide': if (e.pid !== S.id) sound.creak(e.x, fy(e.x, e.z), e.z); else sound.ui('pick'); break;
     case 'gasp': if (e.pid === S.id) { sound.ui('gasp'); toast('You gasp for air.', 'bad'); } else sound.thud(e.x, fy(e.x, e.z), e.z, 0.6); break;
-    case 'notice': sound.scream(G.x, gy, G.z, 0.9); if (e.pid === S.id) { S.shake = 0.5; sound.sting(); } break;
+    case 'notice': sound.scream(G.x, gy, G.z, 0.9); if (e.pid === S.id) { S.shake = 0.5; sound.sting(); setTimeout(() => herVoice(`i see you, ${myName()}.`, 0.9, 0.6), 1100); } break;
     case 'alert': sound.knock(G.x, gy, G.z); break;
     case 'search': if (S.spot === e.spot) { S.warn = 4; sound.ui('scratch'); } break;
-    case 'listen': if (S.spot === e.spot) { S.warn = 4; toast('She is listening. Hold your breath.', 'bad'); } break;
+    case 'listen': if (S.spot === e.spot) { S.warn = 4; toast('She is listening. Hold your breath.', 'bad'); herVoice(`${myName()}... where are you?`, 0.55, 0.5); } break;
     case 'open': { const h = M.hideById(e.spot); sound.creak(h.x, fy(h.x, h.z), h.z, true); break; }
     case 'appear': case 'vanish': sound.buzz(G.x, gy, G.z); break;
     case 'grab':
       sound.grabScream(e.pid === S.id, e.x, fy(e.x, e.z), e.z);
-      if (e.pid === S.id) { S.capT = 0; S.shake = 1.6; S.scare = 1; sound.sting(); S.hold = null; closeNote(); }
+      if (e.pid === S.id) { S.capT = 0; S.shake = 1.6; S.scare = 1; sound.sting(); S.hold = null; closeNote(); try { speechSynthesis.cancel(); } catch {} scrawlName(); }
       else toast(`${nameOf(e.pid)} has been caught! Get to them and hold E to pull them free.`, 'bad');
       break;
     case 'drag': S.dragWin = e.win; if (e.pid === S.id) toast(e.win > 1.3 ? 'She is dragging you away. A teammate can still pull you free.' : 'She is dragging you away.', 'bad'); break;
@@ -672,6 +686,8 @@ function frame(now) {
     world.update(dt, t, cam, G);
     updateHud(dt, t);
     perfTick(dt);
+    // When she is near but has not found you, she sometimes whispers your name. Rarely, so it stays frightening.
+    if ((S.st === 'a' || S.st === 'h') && G.v > 0.3 && cam.gd < 12 && !['chase', 'notice', 'grab', 'drag', 'take'].includes(G.s) && now - lastSaid > 45000 && Math.random() < dt / 25) herVoice(myName() + '...', 0.45, 0.45);
   } else {
     // menu backdrop: drifting down the dark corridor
     const a = t * 0.05;
