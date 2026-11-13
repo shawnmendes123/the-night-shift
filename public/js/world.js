@@ -299,6 +299,10 @@ export class World {
     else if (k === 'fuse') { const c = add(new THREE.CylinderGeometry(0.03, 0.03, 0.14, 10), std(0xcfc9b4), 0, 0.03, 0); c.rotation.z = Math.PI / 2; for (const s of [-1, 1]) add(new THREE.CylinderGeometry(0.032, 0.032, 0.03, 10), std(0x8a6a2a, { metalness: 0.8 }), s * 0.065, 0.03, 0).rotation.z = Math.PI / 2; }
     else if (k === 'chart') { add(new THREE.BoxGeometry(0.24, 0.012, 0.32), m.wood, 0, 0.006, 0); add(new THREE.BoxGeometry(0.21, 0.006, 0.28), m.paper, 0, 0.015, 0.01); add(new THREE.BoxGeometry(0.1, 0.02, 0.03), m.steel, 0, 0.02, -0.14); }
     else if (k === 'meds') { add(new THREE.BoxGeometry(0.34, 0.2, 0.22), std(0x7a1612), 0, 0.1, 0); add(new THREE.BoxGeometry(0.1, 0.03, 0.005), std(0xd8d2c0), 0, 0.12, 0.112); add(new THREE.BoxGeometry(0.03, 0.1, 0.005), std(0xd8d2c0), 0, 0.12, 0.112); add(new THREE.BoxGeometry(0.12, 0.02, 0.03), m.dark, 0, 0.21, 0); }
+    else if (k === 'eye') { add(new THREE.CylinderGeometry(0.05, 0.05, 0.13, 14, 1, true), std(0x9fb3a8, { transparent: true, opacity: 0.35, roughness: 0.1, side: THREE.DoubleSide }), 0, 0.065, 0); add(new THREE.CylinderGeometry(0.052, 0.052, 0.02, 14), std(0x5a5148), 0, 0.14, 0); add(new THREE.SphereGeometry(0.026, 14, 10), std(0xe9e4d8, { roughness: 0.2 }), 0, 0.045, 0); add(new THREE.CircleGeometry(0.011, 12), std(0x3d6a7a, { roughness: 0.2 }), 0, 0.045, 0.0262); }
+    else if (k === 'watch') { const c = add(new THREE.CylinderGeometry(0.03, 0.03, 0.01, 18), std(0xb59a52, { metalness: 0.8, roughness: 0.3 }), 0, 0.006, 0); add(new THREE.CircleGeometry(0.025, 18), std(0xe7e0cc), 0, 0.0115, 0).rotation.x = -Math.PI / 2; add(new THREE.TorusGeometry(0.008, 0.002, 6, 10), std(0xb59a52, { metalness: 0.8 }), 0, 0.006, -0.036); for (let i = 0; i < 6; i++) add(new THREE.TorusGeometry(0.006, 0.0015, 4, 8), std(0xa08a48, { metalness: 0.8 }), Math.sin(i) * 0.02, 0.003, -0.05 - i * 0.012).rotation.x = Math.PI / 2; c.rotation.y = 0.3; }
+    else if (k === 'ring') { add(new THREE.TorusGeometry(0.016, 0.004, 8, 18), std(0xd1a940, { metalness: 0.9, roughness: 0.2 }), 0, 0.004, 0).rotation.x = Math.PI / 2; add(new THREE.BoxGeometry(0.06, 0.004, 0.06), std(0x2a1d16), 0, 0.001, 0); }
+    else if (k === 'badge') { add(new THREE.BoxGeometry(0.09, 0.004, 0.055), std(0xd8d2c0), 0, 0.003, 0); add(new THREE.BoxGeometry(0.09, 0.0045, 0.014), std(0x2b4a72), 0, 0.0035, -0.02); add(new THREE.BoxGeometry(0.025, 0.0047, 0.03), std(0x6b6358), -0.025, 0.0036, 0.008); }
     else if (k === 'doll') { add(new THREE.SphereGeometry(0.05, 10, 8), std(0xb9a892, { roughness: 0.8 }), 0, 0.05, -0.13); add(new THREE.ConeGeometry(0.075, 0.2, 8), std(0x6f6a5c, { roughness: 1 }), 0, 0.05, 0.02).rotation.x = Math.PI / 2; add(new THREE.SphereGeometry(0.054, 8, 6, 0, Math.PI * 2, 0, 1.6), std(0x1c1510, { roughness: 1 }), 0, 0.056, -0.135).rotation.x = -0.8; for (const s of [-1, 1]) { add(new THREE.BoxGeometry(0.02, 0.02, 0.1), std(0xb9a892), s * 0.07, 0.03, -0.02).rotation.y = s * 0.5; const e = add(new THREE.SphereGeometry(0.008, 5, 4), new THREE.MeshBasicMaterial({ color: 0x050505 }), s * 0.018, 0.092, -0.14); e.castShadow = false; } }
     else { add(new THREE.CylinderGeometry(0.035, 0.035, 0.17, 10), std(0x244a2c, { roughness: 0.15, transparent: true, opacity: 0.8 }), 0, 0.085, 0); add(new THREE.CylinderGeometry(0.012, 0.03, 0.08, 8), std(0x244a2c, { roughness: 0.15, transparent: true, opacity: 0.8 }), 0, 0.21, 0); }
     return g;
@@ -311,7 +315,9 @@ export class World {
     for (const it of w.items) {
       seen.add(it.id);
       let m = this.items.get(it.id);
-      if (!m) { m = this.itemMesh(it.k); m.rotation.y = (it.x * 7.3 + it.z * 3.1) % 6.28; this.scene.add(m); this.items.set(it.id, m); }
+      const mk = it.mesh || it.k;
+      if (m && m.userData.mk !== mk) { this.scene.remove(m); m = null; } // item numbers are reused between rounds
+      if (!m) { m = this.itemMesh(mk); m.userData.mk = mk; m.rotation.y = (it.x * 7.3 + it.z * 3.1) % 6.28; this.scene.add(m); this.items.set(it.id, m); }
       m.visible = !it.h;
       m.position.set(it.x, M.floorY(it.x, it.z) + it.y + 0.005, it.z);
     }

@@ -67,6 +67,7 @@ export class Voice {
     try { p.pc && p.pc.close(); } catch {}
     try { p.src && p.src.disconnect(); p.pan && p.pan.disconnect(); p.flat && p.flat.disconnect(); } catch {}
     if (p.el) { p.el.srcObject = null; }
+    if (p.rec) { try { p.rec.stop(); } catch {} p.rec = null; }
     Object.assign(p, { pc: null, tx: null, stream: null, src: null, an: null, el: null, level: 0, queue: [] });
   }
   make(p, sid) {
@@ -126,6 +127,7 @@ export class Voice {
     for (const p of this.peers.values()) {
       if (!p.an) continue;
       p.level = p.level * 0.6 + this.rms(p.an) * 0.4; p.speaking = p.level > 0.015;
+      this.record(p);
       const v = view.peers[p.id];
       let flat = 1, spat = 0, gain = 1, lp = 20000;
       if (view.spatial && v) {
@@ -135,6 +137,25 @@ export class Voice {
       p.flat.gain.setTargetAtTime(flat, t, 0.08); p.panG.gain.setTargetAtTime(spat, t, 0.08);
       p.g.gain.setTargetAtTime(gain, t, 0.12); p.lp.frequency.setTargetAtTime(lp, t, 0.12);
     }
+  }
+  // The Mimic's material: a few short clips of what each teammate said, kept in memory on this computer only.
+  record(p) {
+    if (!window.MediaRecorder || !p.stream) return;
+    const now = performance.now();
+    if (p.speaking) p.lastSpoke = now;
+    if (p.speaking && !p.rec) {
+      try {
+        const rec = new MediaRecorder(p.stream), parts = [];
+        rec.ondataavailable = (e) => { if (e.data && e.data.size) parts.push(e.data); };
+        rec.onstop = () => { const len = performance.now() - rec.t0; if (len > 700 && parts.length) { (p.clips ||= []).push(new Blob(parts, { type: rec.mimeType })); if (p.clips.length > 4) p.clips.shift(); } };
+        rec.t0 = now; rec.start(); p.rec = rec;
+      } catch { p.rec = null; }
+    } else if (p.rec && (now - p.lastSpoke > 450 || now - p.rec.t0 > 3200)) { try { p.rec.stop(); } catch {} p.rec = null; }
+  }
+  async clip(id) {
+    const p = this.peers.get(+id) || this.peers.get(id);
+    if (!p || !p.clips || !p.clips.length || !this.ctx) return null;
+    try { return await this.ctx.decodeAudioData(await p.clips[(Math.random() * p.clips.length) | 0].arrayBuffer()); } catch { return null; }
   }
   talking(id) { const p = this.peers.get(+id) || this.peers.get(id); return !!(p && p.speaking); }
   connected(id) { const p = this.peers.get(+id) || this.peers.get(id); return !!(p && p.state === 'connected'); }

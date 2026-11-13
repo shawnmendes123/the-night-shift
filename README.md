@@ -80,3 +80,17 @@ TURN_PASS=...
 ```
 
 Run `node tools/voice-test.js` (needs Playwright and Chrome) to test voice with two browsers and fake microphones.
+
+## The ghosts
+
+Each shift the server draws one of five at random and nobody is told which. Players work it out from how it hunts, what it says and the paperwork:
+
+- **The Mother**: hunts by sight and sound, stalks, cuts the power. Wants her doll.
+- **The Blind Patient**: cannot see at all; hears almost twice as far, rushes at sounds and takes whoever she walks into. Whispers at your ear. Wants her glass eye.
+- **The Matron**: spots torchlight from far away, cannot see a nurse with the torch off, cuts the power often and speaks over the intercom. Wants her fob watch.
+- **The Surgeon**: never runs and never loses you in the open; you can only hide. Searches every spot in a room, counting aloud. Wants his wedding ring.
+- **The Mimic**: stands in the dark looking like one of the team, and calls nurses from empty rooms in a teammate's voice (short clips kept in memory on each player's own computer, never uploaded). Wants its name badge.
+
+The host can instead pick **All of them** on the sign-in sheet: all five arrive one after another, the morgue drawers are their five names, each returned belonging lays that one to rest, and the exit opens once all five are at rest. The shift is 50% longer.
+
+`node tools/ghost-test.js` checks each ghost's rules.

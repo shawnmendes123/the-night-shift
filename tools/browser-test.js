@@ -9,7 +9,7 @@ const only = process.argv[2];
 
 const srv = await startServer(0, { debug: true });
 const HI = process.env.HI === '1';
-const url = `http://localhost:${srv.port}/?nolock&q=${HI ? 'high' : 'low'}`;
+const url = `http://localhost:${srv.port}/?nolock&ghost=mother&q=${HI ? 'high' : 'low'}`;
 const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--autoplay-policy=no-user-gesture-required'] });
 const errors = [];
 async function client(name, w = HI ? 1280 : 480, h = HI ? 720 : 270) {
@@ -50,7 +50,7 @@ try {
   await dbg(a, 'freeze', { on: true });
   ok(true, 'round started in both browsers');
   await a.waitForFunction(() => window.GhostVoice && window.GhostVoice.ready(), null, { timeout: 30000 });
-  const voice = await ev(a, async () => { window.NS.herVoice('test... where are you?', 0.01); await new Promise((r) => setTimeout(r, 1500)); return { live: window.NS.voiceLive() }; });
+  const voice = await ev(a, async () => { window.NS.herVoice('test... where are you?', { vol: 0.01 }); await new Promise((r) => setTimeout(r, 1500)); return { live: window.NS.voiceLive() }; });
   ok(voice.live, 'her voice engine loads after the round starts and speaks without errors');
   await a.keyboard.press('KeyM'); await sleep(500);
   const mapInfo = await ev(a, () => ({ open: window.NS.S.mapOpen, jobs: document.querySelectorAll('#planList button').length, goals: window.NS.goals().length }));

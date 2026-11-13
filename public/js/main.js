@@ -59,6 +59,13 @@ const heldVm = new THREE.Group(); heldVm.position.set(-0.26, -0.24, -0.5); vm.ad
 let heldKind = null;
 
 let world = null, ghost = null, post = null;
+// One model per kind of ghost, built when first needed. `ghost` is whichever one matters most to you right now.
+const gModels = new Map();
+function modelFor(kind) {
+  let m = gModels.get(kind);
+  if (!m) { m = new GhostModel(scene, kind); gModels.set(kind, m); m.stepCb = (k) => { const st = m.st; if (st) sound.ghostStep(st.x, M.floorY(st.x, st.z), st.z, k); }; }
+  return m;
+}
 const avatars = new Map(); window.NS.avatars = avatars;
 const sound = new Sound();
 const shots = [];
@@ -110,16 +117,15 @@ function perfTick(dt) {
 // Compile every shader up front so nothing stalls the first time the ghost or an item comes into view.
 function precompile() {
   if (!world || !ghost) return;
-  const was = ghost.root.visible; ghost.root.visible = true;
+  const ms = [...gModels.values()], was = ms.map((m) => m.root.visible); ms.forEach((m) => { m.root.visible = true; });
   try { renderer.compile(scene, camera); } catch (e) { console.warn(e); }
-  ghost.root.visible = was;
+  ms.forEach((m, i) => { m.root.visible = was[i]; });
 }
 window.addEventListener('resize', resize);
 function buildScene() {
   world = new World(scene, S.quality);
   world.setPool(S.quality);
-  ghost = new GhostModel(scene);
-  ghost.stepCb = (kind) => sound.ghostStep(S.g.x, M.floorY(S.g.x, S.g.z), S.g.z, kind);
+  ghost = modelFor('mother');
 }
 
 // ====================================================================== network
@@ -209,6 +215,10 @@ function renderLobby() {
   $('lobbyCode').textContent = S.code;
   $('lobbyLink').textContent = location.origin + '/?room=' + S.code;
   $('roster').innerHTML = L.players.map((p) => `<li data-id="${esc(p.id)}">${esc(p.name)}${p.mic ? '<span class="tag mic">mic</span>' : ''}${p.id === L.host ? '<span class="tag">charge nurse (host)</span>' : ''}${p.id === S.id ? '<span class="tag">you</span>' : ''}${p.offline ? '<span class="tag">reconnecting</span>' : ''}</li>`).join('');
+  for (const b of $('gmodes').children) { b.classList.toggle('on', b.dataset.m === (L.mode || 'one')); b.disabled = !host; }
+  $('gmodeNote').textContent = (L.mode || 'one') === 'all'
+    ? 'All five, arriving one after another. Return each one\'s belonging to lay them to rest; clock out once all five are. The shift is half as long again.'
+    : 'One of five, drawn at random. Nobody is told which. Work it out from how it hunts, what it says and what the staff left behind.';
   $('diffs').innerHTML = Object.entries(DIFF).map(([k, d]) => `<button data-d="${k}" class="${k === L.diff ? 'on' : ''}" ${host ? '' : 'disabled'}>${d.label}</button>`).join('');
   const d = DIFF[L.diff];
   $('diffNote').textContent = `${d.quota} of 6 duties, ${Math.round(d.time / 60)} minutes, ${d.rescue}s to pull a caught teammate free${d.jammed ? `, ${Math.round(d.jammed * 100)}% of hiding spots jammed` : ''}.`;
@@ -219,13 +229,14 @@ function renderLobby() {
   $('lobbyNote').textContent = host ? (L.players.length < 2 ? 'You can start alone to practise. The shift is meant for 2-5.' : `${L.players.length} on shift.`) : 'Waiting for the host to start.';
 }
 $('diffs').addEventListener('click', (e) => { if (e.target.dataset.d) send({ t: 'diff', diff: e.target.dataset.d }); });
+$('gmodes').addEventListener('click', (e) => { if (e.target.dataset.m) send({ t: 'mode', mode: e.target.dataset.m }); });
 $('quals').addEventListener('click', (e) => { const q = e.target.dataset.q; if (!q || q === S.quality) return; S.quality = q; localStorage.setItem('ns_quality', q); applyQuality(); renderLobby(); });
 $('sens').addEventListener('input', (e) => { S.sens = +e.target.value; localStorage.setItem('ns_sens', S.sens); $('sensVal').textContent = S.sens.toFixed(2) + 'x'; });
 $('btnHost').onclick = () => connect('');
 $('btnJoin').onclick = () => { const c = $('code').value.trim().toUpperCase(); if (c.length !== 4) { $('menuErr').textContent = 'Enter the 4-letter shift code.'; return; } connect(c); };
 $('code').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('btnJoin').click(); });
 $('name').addEventListener('keydown', (e) => { if (e.key === 'Enter') ($('code').value ? $('btnJoin') : $('btnHost')).click(); });
-$('btnStart').onclick = () => send({ t: 'start' });
+$('btnStart').onclick = () => send({ t: 'start', kind: Q.get('ghost') || undefined }); // ?ghost= only works on a debug server
 $('btnCopy').onclick = () => { navigator.clipboard?.writeText(location.origin + '/?room=' + S.code); $('btnCopy').textContent = 'Copied'; setTimeout(() => ($('btnCopy').textContent = 'Copy link'), 1500); };
 $('btnAgain').onclick = () => send({ t: 'lobby' });
 $('name').value = (Q.get('name') || '').slice(0, 16) || localStorage.getItem('ns_name') || ''; // ?name= comes from the briefing
@@ -238,7 +249,7 @@ function startRound(m) {
   lastSaid = performance.now() - 20000; loadVoice();
   S.cfg = m.cfg; S.diff = m.diff; S.snap = null; S.spec = null; S.st = 'a'; S.spot = null; S.note = false; S.hold = null; S.capT = 0; S.rescued = 0; S.track = null; route = null; openMap(false, true);
   Object.assign(S.me, { x: m.you.x, z: m.you.z, ry: m.you.ry, rx: 0, crouch: false, flash: true, stamina: STAMINA.max, mode: 'still', winded: false });
-  S.g.v = 0; S.g.s = 'dormant';
+  S.g.v = 0; S.g.s = 'dormant'; S.gst = []; if (mimicAv) { mimicAv.dispose(); mimicAv = null; }
   for (const a of avatars.values()) a.dispose(); avatars.clear();
   for (const id in world.doors) { const d = world.doors[id]; d.cur = d.tgt = m.world.doors[id][0]; d.g.rotation.y = d.cur ? d.open : d.closed; }
   applyWorld(m.world);
@@ -254,9 +265,8 @@ function startRound(m) {
 function endRound(m) {
   show('end');
   $('endTitle').textContent = m.win ? 'Clocked out' : m.reason === 'time' ? '06:00 - nobody clocked out' : 'No one left on shift';
-  $('endText').textContent = m.win
-    ? `The staff door closed behind you. In the morgue, ${m.ghost} lies with the doll that was kept from her.`
-    : m.mystery ? `${m.ghost} had her child back, but the ward kept the staff.` : `The call light in Room 3 is still ringing. Nobody found out what ${m.ghost.split(' ')[0]} wanted.`;
+  const WHO = { mother: 'The Mother', blind: 'The Blind Patient', matron: 'The Matron', surgeon: 'The Surgeon', mimic: 'The Mimic' };
+  $('endText').textContent = (m.win ? 'The staff door closed behind you. ' : '') + (m.story || '') + (m.kinds && m.mode !== 'all' ? ` It was ${WHO[m.kinds[0]]}.` : '');
   $('endRoster').innerHTML = m.players.map((p) => `<li class="${p.status === 'Taken' ? 'taken' : ''}">${esc(p.name)}<span class="tag">${p.status}</span></li>`).join('');
   $('endStats').textContent = `Duties ${m.duties}/${m.quota} required. Shift length ${Math.floor(m.elapsed / 60)}m ${m.elapsed % 60}s. Difficulty: ${DIFF[S.diff].label}.`;
   renderEndButtons();
@@ -270,21 +280,15 @@ function applyWorld(w) {
   S.world = w; world.applyWorld(w); sound.doors = Object.fromEntries(Object.entries(w.doors).map(([k, v]) => [k, { open: !!v[0], locked: !!v[1] }]));
   $('dutyCount').textContent = `${Math.min(w.done, w.quota)}/${w.quota} needed`;
   $('duties').innerHTML = w.tasks.map((t) => `<li class="${t.done ? 'done' : ''}">${esc(t.label)}</li>`).join('');
-  const has = (id) => w.clues.some((c) => c.id === id);
   const lines = [];
   if (w.exitOpen) lines.push(['CLOCK OUT: reach the staff exit.', 1]);
-  else if (w.mystery) lines.push([`She has her child. Finish ${Math.max(0, w.quota - w.done)} more ${w.quota - w.done === 1 ? 'duty' : 'duties'} to unlock the exit.`, 1]);
-  else {
-    lines.push(['Find out who is still ringing for a nurse - and what she wants.', 0]);
-    if (has('clue_log') || has('clue_orders')) lines.push(['She keeps asking for a doll.', 0]);
-    if (has('clue_file')) lines.push(['Her name is in the admission file. Her body is in the morgue.', 0]);
-    if (has('doll')) lines.push(['Bring the doll to her.', 1]);
-  }
+  else if (w.mystery) lines.push([`${w.mode === 'all' ? 'All of them are at rest' : 'They have what was taken'}. Finish ${Math.max(0, w.quota - w.done)} more ${w.quota - w.done === 1 ? 'duty' : 'duties'} to unlock the exit.`, 1]);
+  else for (const l of w.hints || []) lines.push(l);
   $('objective').innerHTML = lines.map(([t, n]) => `<li class="${n ? 'new' : ''}">${esc(t)}</li>`).join('');
-  $('clueCount').textContent = `evidence ${w.clues.length}/5`;
+  $('clueCount').textContent = `evidence ${w.clues.length}/${w.clueTotal || 5}`;
   $('evidence').innerHTML = w.clues.map((c) => `<li><b>${esc(c.title)}</b>${esc(c.short)}</li>`).join('') || '<li>No evidence yet. Read what the staff left behind.</li>';
-  const it = myItem(), k = it ? it.k : null;
-  $('held').innerHTML = it ? `Carrying: <b>${M.ITEM_NAMES[k]}</b>${it.txt ? ` (${esc(it.txt)})` : ''} <small>${k === 'bottle' ? 'click to throw, G to drop' : 'G to drop'}</small>` : '';
+  const it = myItem(), k = it ? it.mesh || it.k : null;
+  $('held').innerHTML = it ? `Carrying: <b>${esc(it.nm || M.ITEM_NAMES[it.k])}</b>${it.txt ? ` (${esc(it.txt)})` : ''} <small>${it.k === 'bottle' ? 'click to throw, G to drop' : 'G to drop'}</small>` : '';
   if (k !== heldKind) { heldVm.clear(); heldKind = k; if (k) { const m = world.itemMesh(k); m.scale.setScalar(k === 'meds' ? 0.7 : 1.2); m.rotation.set(0.3, 0.6, 0); heldVm.add(m); } }
 }
 function toast(text, cls = '') {
@@ -300,29 +304,62 @@ const myName = () => (S.id && nameOf(S.id) !== 'Someone' ? nameOf(S.id) : $('nam
 let lastSaid = 0;
 // Her voice: speech generated on this device by meSpeak (GPL, eSpeak), torn into a growl by ghostfx.js, heard from where she is.
 let voiceLoading = null, voiceBus = null;
-const herLines = () => [`i see you, ${myName()}.`, `${myName()}... where are you?`, `${myName()}...`];
 function loadVoice() {
   if (voiceLoading) return voiceLoading;
   const add = (src) => new Promise((ok, no) => { const sc = document.createElement('script'); sc.src = src; sc.onload = ok; sc.onerror = no; document.head.appendChild(sc); });
   voiceLoading = (async () => {
     if (!window.meSpeak) await add('js/ghostvoice.js');
     if (!window.GhostVoice) await add('js/ghostfx.js');
-    for (const l of herLines()) { if (sound.ok) await window.GhostVoice.prep(sound.ctx, l).catch(() => {}); await new Promise((r) => setTimeout(r, 40)); }
   })().catch(() => { voiceLoading = null; });
   return voiceLoading;
 }
+// What each of them says. n is your name; d carries extras (the Surgeon's count).
+const pickOne = (a) => a[(Math.random() * a.length) | 0];
+const VOICE_LINES = {
+  mother: { notice: (n) => `i see you, ${n}.`, listen: (n) => `${n}... where are you?`, near: (n) => `${n}...` },
+  blind: { notice: (n) => `there you are, ${n}.`, listen: (n) => pickOne([`shh. i can hear you breathing, ${n}.`, `your heart is so loud, ${n}.`]), near: (n) => pickOne([`${n}... walk softer.`, `i can hear you, ${n}.`]) },
+  matron: { notice: (n) => `nurse ${n}. lights out.`, listen: (n) => `i know you are in there, ${n}.`, near: (n) => `lights out, ${n}.`,
+    pa: (n) => pickOne(['lights out. lights out on all wards.', `nurse ${n} to the matron's office.`, 'no torches on the ward after midnight.', 'room three is not to be answered.', `${n}. back to your station.`]) },
+  surgeon: { notice: (n) => `hold still, ${n}.`, listen: () => 'breathe normally.', near: () => pickOne(['scalpel.', 'next patient.', 'clamp.']),
+    count: (n, d) => ['one.', 'two.', 'three.', 'four.', 'five.', 'six.', 'seven.', 'eight.', 'nine.'][d.n - 1] || 'and the next.' },
+  mimic: { notice: (n) => `${n}! it's me!`, listen: (n) => `${n}? it's okay. you can come out.`, near: (n) => pickOne([`${n}? is that you?`, `${n}, over here.`]) },
+};
+function herLine(G, key, d = {}) {
+  const kind = (G && G.k) || S.g.k || 'mother', L = (VOICE_LINES[kind] || VOICE_LINES.mother)[key];
+  if (!L) return;
+  herVoice(L(myName(), d), { kind, x: G ? G.x : S.g.x, z: G ? G.z : S.g.z, pa: key === 'pa', vol: key === 'count' ? 0.8 : 1 });
+}
 function hushVoice() { const g = voiceBus; if (!g || !sound.ok) return; voiceBus = null; g.gain.setTargetAtTime(0, sound.ctx.currentTime, 0.02); setTimeout(() => { try { g.disconnect(); } catch {} }, 500); }
-function herVoice(text, vol = 1) {
+function herVoice(text, o = {}) {
   if (!sound.ok || !window.GhostVoice || !window.GhostVoice.ready()) return;
-  hushVoice(); lastSaid = performance.now();
-  const c = sound.ctx, g = c.createGain(); voiceBus = g;
-  g.connect(sound.at(S.g.x, M.floorY(S.g.x, S.g.z) + 1.4, S.g.z, 1.8 * vol)); g.connect(sound.flat(0.55 * vol)); // from her, but always audible
-  window.GhostVoice.say(c, g, text, { vol: 1 }).catch(() => {});
+  const kind = o.kind || 'mother', vol = o.vol ?? 1, c = sound.ctx, g = c.createGain();
+  if (!o.pa) { hushVoice(); voiceBus = g; }
+  lastSaid = performance.now();
+  if (o.pa) g.connect(sound.flat(0.75 * vol)); // the intercom is everywhere at once
+  else if (kind === 'blind') { const side = Math.random() < 0.5 ? -1 : 1, rx = Math.cos(S.me.ry) * side * 0.35, rz = -Math.sin(S.me.ry) * side * 0.35; g.connect(sound.at(S.me.x + rx, M.floorY(S.me.x, S.me.z) + 1.55, S.me.z + rz, 0.9 * vol)); } // at your ear
+  else { const x = o.x ?? S.g.x, z = o.z ?? S.g.z; g.connect(sound.at(x, M.floorY(x, z) + 1.4, z, 1.8 * vol)); g.connect(sound.flat(0.5 * vol)); } // from her, but always audible
+  window.GhostVoice.say(c, g, text, { vol: 1, kind }).catch(() => {});
+}
+// The Mimic calls you from another room: in a teammate's real voice if it has heard them on voice chat, otherwise its own.
+async function mimicLure(e) {
+  const y = M.floorY(e.x, e.z);
+  if (e.how === 'steps') { for (let i = 0; i < 6; i++) setTimeout(() => sound.ghostStep(e.x + Math.sin(i) * 0.4, y, e.z + i * 0.3, 'step'), i * 480); return; }
+  const clip = e.as != null ? await voice.clip(e.as) : null;
+  if (clip && sound.ok) {
+    const c = sound.ctx, src = c.createBufferSource(), lp = c.createBiquadFilter(), g = c.createGain();
+    src.buffer = clip; src.playbackRate.value = 0.94; lp.type = 'lowpass'; lp.frequency.value = 3200; g.gain.value = 1.4;
+    src.connect(lp); lp.connect(g); g.connect(sound.at(e.x, y + 1.5, e.z, 1.6)); src.start();
+    return;
+  }
+  const who = e.as != null ? nameOf(e.as) : null;
+  herVoice(pickOne([`${myName()}, over here.`, `${myName()}! help me!`, `${myName()}, i found it. come here.`]), { kind: 'mimic', x: e.x, z: e.z, vol: 1.1 });
+  if (who) setTimeout(() => toast(`That sounded like ${who}.`), 900);
 }
 function scrawlName() { const el = $('nameScrawl'); el.textContent = myName().toUpperCase(); el.classList.remove('show'); void el.offsetWidth; el.classList.add('show'); }
 
 function onEvent(e) {
-  const fy = (x, z) => M.floorY(x, z) + 1.2, G = S.g, gy = M.floorY(G.x, G.z) + 1.4;
+  const G = e.gi !== undefined && S.gst && S.gst[e.gi] ? S.gst[e.gi] : e.gx !== undefined ? { x: e.gx, z: e.gz } : S.g; // which ghost this came from
+  const fy = (x, z) => M.floorY(x, z) + 1.2, gy = M.floorY(G.x, G.z) + 1.4;
   switch (e.k) {
     case 'toast': toast(e.text); break;
     case 'note': showNote(e.title, e.body); break;
@@ -334,18 +371,24 @@ function onEvent(e) {
     case 'task': sound.ui('task'); toast(`Duty done: ${e.label}${e.by ? ' (' + e.by + ')' : ''}`); break;
     case 'clue': toast(`Evidence: ${e.title}${e.by ? ' - found by ' + e.by : ''}`); break;
     case 'exitOpen': sound.ui('toll'); toast('The staff exit is unlocked', 'big'); toast('Clock out. Do not stop.'); break;
-    case 'mystery': toast(e.name, 'big'); toast('She has her child back. She has not left.'); for (const r of M.ROOMS) world.flickerRoom(r.id, 3.5); sound.scream(33, M.FLOOR_B + 1.5, 33, 0.6); break;
-    case 'wrong': sound.scream(e.x, fy(e.x, e.z), e.z, 1); world.flickerRoom('morgue', 3); world.flickerRoom('bcorr', 3); toast('That is not her. She heard that.', 'bad'); break;
+    case 'mystery': toast(e.name, 'big'); toast(e.all ? 'Every one of them is at rest. Get out.' : { blind: 'She has her eye back. She can still hear you.', matron: 'Her watch has stopped. She is still on shift.', surgeon: 'He has his ring. He is still following.', mimic: 'Its badge is back. It is still wearing her.' }[e.kind] || 'She has her child back. She has not left.'); for (const r of M.ROOMS) world.flickerRoom(r.id, 3.5); sound.scream(33, M.FLOOR_B + 1.5, 33, 0.6); break;
+    case 'wrong': sound.scream(e.x, fy(e.x, e.z), e.z, 1); world.flickerRoom('morgue', 3); world.flickerRoom('bcorr', 3); toast('Wrong name. They heard that.', 'bad'); break;
+    case 'rested': toast(e.name, 'big'); toast(`Laid to rest by ${e.by}. ${5 - e.n} still working tonight.`); for (const r of M.ROOMS) world.flickerRoom(r.id, 1.6); sound.bell(33, M.FLOOR_B + 1.5, 32, 0.7); break;
+    case 'rest': sound.buzz(G.x, gy, G.z); break;
+    case 'rush': sound.knock(G.x, gy, G.z); if (Math.hypot(G.x - S.me.x, G.z - S.me.z) < 14) { S.warn = 2; sound.scream(G.x, gy, G.z, 0.45); } break;
+    case 'pa': herLine(G, 'pa'); break;
+    case 'count': if (Math.hypot(G.x - S.me.x, G.z - S.me.z) < 16) herLine(G, 'count', { n: e.n }); break;
+    case 'mimic': if (e.pid === S.id) mimicLure(e); break;
     case 'pickup': if (e.pid === S.id) sound.ui('pick'); break;
     case 'drop': sound.thud(e.x, fy(e.x, e.z) - 1, e.z, e.item === 'bottle' ? 1.2 : 0.8); break;
     case 'throw': { const m = world.itemMesh('bottle'); scene.add(m); shots.push({ m, x: e.x, z: e.z, tx: e.tx, tz: e.tz, t: 0, fly: e.fly }); break; }
     case 'shatter': sound.shatter(e.x, fy(e.x, e.z) - 1, e.z); break;
     case 'hide': case 'unhide': if (e.pid !== S.id) sound.creak(e.x, fy(e.x, e.z), e.z); else sound.ui('pick'); break;
     case 'gasp': if (e.pid === S.id) { sound.ui('gasp'); toast('You gasp for air.', 'bad'); } else sound.thud(e.x, fy(e.x, e.z), e.z, 0.6); break;
-    case 'notice': sound.scream(G.x, gy, G.z, 0.9); if (e.pid === S.id) { S.shake = 0.5; sound.sting(); setTimeout(() => herVoice(`i see you, ${myName()}.`, 0.9), 1100); } break;
+    case 'notice': sound.scream(G.x, gy, G.z, 0.9); if (e.pid === S.id) { S.shake = 0.5; sound.sting(); setTimeout(() => herLine(G, 'notice'), 1100); } break;
     case 'alert': sound.knock(G.x, gy, G.z); break;
     case 'search': if (S.spot === e.spot) { S.warn = 4; sound.ui('scratch'); } break;
-    case 'listen': if (S.spot === e.spot) { S.warn = 4; toast('She is listening. Hold your breath.', 'bad'); herVoice(`${myName()}... where are you?`, 0.6); } break;
+    case 'listen': if (S.spot === e.spot) { S.warn = 4; toast('Something is listening. Hold your breath.', 'bad'); herLine(G, 'listen'); } break;
     case 'open': { const h = M.hideById(e.spot); sound.creak(h.x, fy(h.x, h.z), h.z, true); break; }
     case 'appear': case 'vanish': sound.buzz(G.x, gy, G.z); break;
     case 'grab':
@@ -375,6 +418,43 @@ function onEvent(e) {
 }
 
 
+
+
+// ====================================================================== the ghosts
+// Several can be in the building at once. Each is drawn from its own model; the one that matters most to you
+// (the one holding you, else the nearest you could see) drives the heartbeat, torch flicker and dread.
+let mimicAv = null;
+const DISGUISE = ['idle', 'patrol', 'block', 'look', 'investigate', 'toSpot'];
+function updateGhosts(dt, list, t) {
+  S.gst ||= [];
+  const used = new Set();
+  list.forEach((sg, i) => {
+    const kind = sg.k || 'mother', m = modelFor(kind); used.add(kind);
+    let st = S.gst[i];
+    if (!st || st.k !== kind) st = S.gst[i] = { x: sg.x, z: sg.z, ry: sg.ry, speed: 0, v: 0, k: kind, i };
+    const px = st.x, pz = st.z;
+    if (Math.hypot(sg.x - st.x, sg.z - st.z) > 4 || st.v < 0.05) { st.speed = 0; } else st.speed = lerp(st.speed, Math.hypot(sg.x - px, sg.z - pz) / Math.max(dt, 1e-3), 0.2);
+    Object.assign(st, { x: sg.x, z: sg.z, ry: sg.ry, v: sg.v, a: sg.a, s: sg.s, vic: sg.vic, spot: sg.spot });
+    m.st = st; m.update(dt, st, M.floorY(st.x, st.z), st.speed);
+    // the Mimic, when it is not hunting, stands in the dark looking like one of you
+    if (kind === 'mimic') {
+      const disguised = st.v > 0.5 && DISGUISE.includes(st.s) && S.st !== 'c';
+      if (disguised) {
+        if (!mimicAv) { const others = (S.lobby ? S.lobby.players : []).filter((p) => p.id !== S.id); const who = others.length ? others[(Math.random() * others.length) | 0].name : nameOf(S.id); mimicAv = new Avatar(scene, 'mimic', who, (k2) => world.itemMesh(k2)); }
+        m.root.visible = false;
+        mimicAv.update(dt, ['mimic', st.x, st.z, st.ry, 0, st.speed > 0.3 ? 'walk' : 'still', 0, 'a', null, 0, 0, 0, 0, 0], M.floorY(st.x, st.z), null, false, t);
+      } else if (mimicAv) mimicAv.root.visible = false;
+    }
+  });
+  S.gst.length = list.length;
+  for (const [k, m] of gModels) if (!used.has(k)) m.root.visible = false;
+  // focus
+  const live = S.gst.filter((g) => g.s !== 'rest' && g.s !== 'dormant');
+  let f = S.gst.find((g) => g.vic === S.id && g.vic !== undefined && g.vic !== null);
+  if (!f) { let best = Infinity; for (const g of live) { if (g.v < 0.3) continue; const d = Math.hypot(g.x - S.me.x, g.z - S.me.z); if (d < best) { best = d; f = g; } } }
+  f ||= live[0] || S.gst[0];
+  if (f) { Object.assign(S.g, { x: f.x, z: f.z, ry: f.ry, v: f.v, a: f.a, s: f.s, speed: f.speed, k: f.k, i: f.i }); ghost = modelFor(f.k); }
+}
 
 // ====================================================================== voice chat
 let voiceT = 0, talkSent = 0, voiceView = { spatial: false, alive: true, peers: {} };
@@ -461,9 +541,13 @@ function goals() {
   if (!w.mystery) {
     const has = (id) => w.clues.some((c) => c.id === id);
     for (const id of ['clue_log', 'clue_orders', 'clue_file']) if (!has(id)) { const s2 = stn(id); add(id, 'Evidence: ' + CLUE_SPOTS[id], s2.x, s2.z); }
-    const doll = item('doll');
-    if (doll && mine(doll)) add('doll', 'Morgue drawers: find her name', 33, 32.1);
-    else if (doll && (has('clue_log') || has('clue_orders') || has('doll'))) { const q = at(doll); add('doll', 'The doll' + by(doll), q.x, q.z); }
+    // belongings: one, or five in All of them. Each goes to the drawer with its owner's name.
+    const all = w.mode === 'all', known = all ? has('clue_file') || w.clues.some((c) => c.id.startsWith('relic')) : has('clue_log') || has('clue_orders') || has('relic');
+    for (const it of w.items.filter((i) => i.k === 'doll')) {
+      const id = 'relic:' + it.o, nm = it.nm || 'The doll';
+      if (mine(it)) add(id, `Morgue drawers: find the name for the ${nm.toLowerCase()}`, 33, 32.1);
+      else if (known || (all && has('relic' + it.o))) { const q = at(it); add(id, nm + by(it), q.x, q.z); }
+    }
   }
   out.forEach((q, i) => { q.n = i + 1; });
   return out;
@@ -578,7 +662,7 @@ function findTarget() {
     const score = ang + d * 0.25 + (o.pri || 0);
     if (!best || score < best.score) best = { ...o, x, z, score };
   };
-  if (S.snap) for (const p of S.snap.p) if (p[0] !== S.id && p[7] === 'c' && S.g.s === 'drag') consider(p[1], p[2], 2.6, { kind: 'rescue', id: p[0], label: `Pull ${nameOf(p[0])} free`, hold: 0.7, pri: -2 });
+  if (S.snap) for (const p of S.snap.p) if (p[0] !== S.id && p[7] === 'c' && (S.gst || []).some((g) => g.s === 'drag' && g.vic === p[0])) consider(p[1], p[2], 2.6, { kind: 'rescue', id: p[0], label: `Pull ${nameOf(p[0])} free`, hold: 0.7, pri: -2 });
   for (const d of M.DOORS) {
     if (d.arch) continue;
     const [open, lockd] = w.doors[d.id], c = M.doorPos(d);
@@ -586,7 +670,7 @@ function findTarget() {
     if (lockd) { if (d.lock === 'key' && held === 'key') label = 'Unlock with the basement key'; else { label = d.lock === 'exit' ? 'Staff exit - locked' : 'Locked'; no = true; } }
     consider(c.x, c.z, REACH, { kind: 'door', id: d.id, label, no });
   }
-  for (const i of w.items) if (!i.h) consider(i.x, i.z, REACH, { kind: 'item', id: i.id, label: `${held ? 'Swap for' : 'Pick up'} ${M.ITEM_NAMES[i.k].toLowerCase()}`, pri: -0.3 });
+  for (const i of w.items) if (!i.h) consider(i.x, i.z, REACH, { kind: 'item', id: i.id, label: `${held ? 'Swap for' : 'Pick up'} ${(i.nm || M.ITEM_NAMES[i.k]).toLowerCase()}`, pri: -0.3 });
   for (const s of M.STATIONS) {
     let o = null;
     if (s.k === 'clue') o = { label: 'Read' };
@@ -594,7 +678,7 @@ function findTarget() {
     else if (s.k === 'breaker') { if (!w.power) o = w.fuseFitted ? { label: 'Reset the breaker', hold: 2.5, work: 1 } : held === 'fuse' ? { label: 'Fit the fuse and throw the breaker', hold: 2.5, work: 1 } : { label: 'Breaker - no fuse fitted', no: true }; }
     else if (s.k === 'medcab') { if (!w.tasks.find((t) => t.id === 'meds').done) o = held === 'meds' ? { label: 'Put the medicine case away' } : { label: 'Medicine cabinet - the case is missing', no: true }; }
     else if (s.k === 'slot') { if (held === 'chart') o = { label: `Clip the chart to Bed ${s.n}` }; }
-    else if (s.k === 'drawer') { if (!w.mystery) o = held === 'doll' ? (w.tried.includes(s.n) ? { label: `Drawer ${s.n} - not her`, no: true } : { label: `Lay the doll in drawer ${s.n} (${w.drawers[s.n - 1]})`, hold: 1.2 }) : { label: `Read the tag on drawer ${s.n}` }; }
+    else if (s.k === 'drawer') { if (!w.mystery) { const filled = (w.filled || []).includes(s.n), tk = w.mode === 'all' ? `${s.n}:${it && it.o}` : s.n; o = filled ? { label: `Drawer ${s.n} (${w.drawers[s.n - 1]}) - at rest`, no: true } : held === 'doll' ? (w.tried.includes(tk) ? { label: `Drawer ${s.n} - not theirs`, no: true } : { label: `Lay the ${(it.nm || 'doll').toLowerCase()} in drawer ${s.n} (${w.drawers[s.n - 1]})`, hold: 1.2 }) : { label: `Read the tag on drawer ${s.n}` }; } }
     if (o) consider(s.x, s.z, REACH + 0.2, { kind: 'station', id: s.id, pri: -0.2, ...o });
   }
   for (const h of M.HIDES) {
@@ -795,7 +879,9 @@ function viewSnap(now) {
   let i = n - 1; while (i > 0 && snaps[i - 1].t > rt) i--;
   const A = snaps[Math.max(0, i - 1)], B = snaps[i], b = B.m, a = A.m;
   const u = B.t > A.t ? clamp((rt - A.t) / (B.t - A.t), 0, 1) : 1;
-  const g = near(a.g.x, a.g.z, b.g.x, b.g.z) ? { ...(u < 0.5 ? a.g : b.g), x: lerp(a.g.x, b.g.x, u), z: lerp(a.g.z, b.g.z, u), ry: ang(a.g.ry, b.g.ry, u), v: lerp(a.g.v, b.g.v, u) } : (u < 0.5 ? a.g : b.g);
+  const ga = a.gs || [a.g], gb = b.gs || [b.g];
+  const gs = gb.map((B2, k) => { const A2 = ga[k]; if (!A2) return B2; return near(A2.x, A2.z, B2.x, B2.z) ? { ...(u < 0.5 ? A2 : B2), x: lerp(A2.x, B2.x, u), z: lerp(A2.z, B2.z, u), ry: ang(A2.ry, B2.ry, u), v: lerp(A2.v, B2.v, u) } : (u < 0.5 ? A2 : B2); });
+  const g = gs[0];
   const latest = snaps[n - 1].m;
   const p = latest.p.map((row) => {
     const id = row[0];
@@ -827,10 +913,9 @@ function frame(now) {
   if (S.phase === 'game' && S.snap) {
     updateSelf(dt);
     // ghost: drawn slightly in the past, interpolated between the two snapshots around that moment
-    const V = viewSnap(now), sg = V.g, G = S.g, px = G.x, pz = G.z;
-    if (Math.hypot(sg.x - G.x, sg.z - G.z) > 4 || G.v < 0.05) { G.x = sg.x; G.z = sg.z; G.ry = sg.ry; G.speed = 0; } else { G.x = sg.x; G.z = sg.z; G.ry = sg.ry; G.speed = lerp(G.speed, Math.hypot(G.x - px, G.z - pz) / Math.max(dt, 1e-3), 0.25); }
-    G.v = sg.v; G.a = sg.a; G.s = sg.s;
-    ghost.update(dt, G, M.floorY(G.x, G.z), G.speed);
+    const V = viewSnap(now);
+    updateGhosts(dt, V.gs || [V.g], t);
+    const G = S.g;
     cam = updateCamera(dt);
     // other players
     const seen = new Set();
@@ -841,7 +926,7 @@ function frame(now) {
       if (!a) { a = new Avatar(scene, p[0], nameOf(p[0]), (k2) => world.itemMesh(k2)); avatars.set(p[0], a); }
       const it = S.world.items.find((i) => i.h === p[0]);
       const cx = a.cur ? a.cur.x : p[1], cz = a.cur ? a.cur.z : p[2];
-      a.update(dt, p, M.floorY(cx, cz), it ? it.k : null, (S.st === 'd' || S.st === 'e') && S.spec === p[0], t);
+      a.update(dt, p, M.floorY(cx, cz), it ? it.mesh || it.k : null, (S.st === 'd' || S.st === 'e') && S.spec === p[0], t);
     }
     for (const [id, a] of avatars) if (!seen.has(id)) { a.dispose(); avatars.delete(id); }
     const lit = [...avatars.values()].filter((a) => a.torch).sort((a, b) => Math.hypot(a.torch.p[0] - camera.position.x, a.torch.p[2] - camera.position.z) - Math.hypot(b.torch.p[0] - camera.position.x, b.torch.p[2] - camera.position.z));
@@ -862,7 +947,7 @@ function frame(now) {
     planTick(dt);
     perfTick(dt);
     // When she is near but has not found you, she sometimes whispers your name. Rarely, so it stays frightening.
-    if ((S.st === 'a' || S.st === 'h') && G.v > 0.3 && cam.gd < 12 && !['chase', 'notice', 'grab', 'drag', 'take'].includes(G.s) && now - lastSaid > 45000 && Math.random() < dt / 25) herVoice(myName() + '...', 0.5);
+    if ((S.st === 'a' || S.st === 'h') && G.v > 0.3 && cam.gd < 12 && !['chase', 'notice', 'grab', 'drag', 'take'].includes(G.s) && now - lastSaid > 45000 && Math.random() < dt / 25) herLine(S.g, 'near');
   } else {
     // menu backdrop: drifting down the dark corridor
     const a = t * 0.05;
@@ -870,7 +955,8 @@ function frame(now) {
     camera.rotation.set(Math.sin(t * 0.3) * 0.03, -Math.PI / 2 + Math.sin(t * 0.13) * 0.25, 0);
     torch.intensity = 24 * (Math.sin(t * 3.1) * Math.sin(t * 7.7) > 0.7 ? 0.2 : 1); torchFill.intensity = 0.5; vm.visible = false;
     if (world) world.update(dt, t, camera.position, null);
-    if (ghost) ghost.root.visible = false;
+    for (const m of gModels.values()) m.root.visible = false;
+    if (mimicAv) mimicAv.root.visible = false;
   }
   S.fade = lerp(S.fade, S.fadeTo, Math.min(1, dt * (S.fadeTo > S.fade ? 2.2 : 1.2)));
   const c0 = S.capT, blink = S.phase === 'game' && S.st === 'c' && !REDUCED && ((c0 > 0.16 && c0 < 0.22) || (c0 > 0.5 && c0 < 0.55) || (c0 > 0.86 && c0 < 0.9));

@@ -3,21 +3,22 @@ import { DIFF, LOUD, MAX_PLAYERS, REACH } from '../shared/config.js';
 import * as M from '../shared/map.js';
 import { Nav } from '../shared/nav.js';
 import { Ghost } from './ghost.js';
+import { KINDS, GHOSTS, clueText, hints, epitaph, fullName } from '../shared/ghosts.js';
 // Voice chat connection helpers. STUN is free; a TURN relay (set TURN_URL, TURN_USER, TURN_PASS) lets voice
 // through strict networks that block direct peer-to-peer audio.
 const ICE = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
 if (process.env.TURN_URL) ICE.push({ urls: process.env.TURN_URL.split(',').map((u) => u.trim()), username: process.env.TURN_USER || '', credential: process.env.TURN_PASS || '' });
 
 const TICK = 1 / 20;
-const SURNAMES = ['Marrow', 'Quill', 'Feld', 'Calder', 'Voss', 'Hale', 'Brandt', 'Lowe'];
-const FIRST = ['Ilse', 'Edda', 'Nora', 'Ruth', 'Agnes', 'Mabel'];
+const SURNAMES = ['Marrow', 'Quill', 'Feld', 'Calder', 'Voss', 'Hale', 'Brandt', 'Lowe', 'Grieve', 'Ashby'];
+const ARRIVE_GAP = { easy: 180, medium: 150, hard: 120, extreme: 90 }; // All of them: seconds between arrivals
 function mulberry32(a) { return () => { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
 const d2 = (a, x, z) => Math.hypot(a.x - x, a.z - z);
 
 export class Room {
   constructor(code, opts = {}) {
     this.code = code; this.players = new Map(); this.phase = 'lobby'; this.diff = 'medium';
-    this.nextId = 1; this.hostId = null; this.debug = !!opts.debug; this.grace = opts.grace; this.timer = null; this.onEmpty = opts.onEmpty;
+    this.nextId = 1; this.hostId = null; this.mode = 'one'; this.debug = !!opts.debug; this.grace = opts.grace; this.timer = null; this.onEmpty = opts.onEmpty;
   }
   send(p, msg) { if (p.ws && p.ws.readyState === 1) p.ws.send(JSON.stringify(msg)); }
   broadcast(msg) { const s = JSON.stringify(msg); for (const p of this.players.values()) if (p.ws && p.ws.readyState === 1) p.ws.send(s); }
@@ -61,7 +62,7 @@ export class Room {
     this.players.delete(p.id);
     if (this.phase === 'playing' && p.alive && !p.escaped) {
       this.dropItem(p, false);
-      if (this.ghost.victim === p.id) this.ghost.victim = null;
+      for (const g of this.ghosts) if (g.victim === p.id) g.victim = null;
       this.toast(`${p.name} left the building.`);
     }
     if (this.hostId === p.id) this.hostId = this.players.keys().next().value ?? null;
@@ -70,29 +71,32 @@ export class Room {
     if (this.phase === 'playing') this.checkEnd();
   }
   sendLobby() {
-    this.broadcast({ t: 'lobby', phase: this.phase, diff: this.diff, host: this.hostId, players: [...this.players.values()].map((p) => ({ id: p.id, name: p.name, offline: !!p.offline, mic: !!p.mic })) });
+    this.broadcast({ t: 'lobby', phase: this.phase, diff: this.diff, mode: this.mode, host: this.hostId, players: [...this.players.values()].map((p) => ({ id: p.id, name: p.name, offline: !!p.offline, mic: !!p.mic })) });
   }
   stop() { if (this.timer) clearInterval(this.timer); this.timer = null; }
 
   // ---------------------------------------------------------------- round setup
-  startRound(seed = (Math.random() * 2 ** 31) | 0) {
+  startRound(seed = (Math.random() * 2 ** 31) | 0, force) {
     const rng = (this.rng = mulberry32(seed));
-    const cfg = (this.cfg = DIFF[this.diff]);
+    const all = this.mode === 'all';
+    const cfg = (this.cfg = { ...DIFF[this.diff], time: Math.round(DIFF[this.diff].time * (all ? 1.5 : 1)) });
     const pick = (arr) => arr[(rng() * arr.length) | 0];
     const shuffle = (arr) => { const a = [...arr]; for (let i = a.length - 1; i > 0; i--) { const j = (rng() * (i + 1)) | 0; [a[i], a[j]] = [a[j], a[i]]; } return a; };
     this.nav = new Nav();
     this.doors = {};
     for (const d of M.DOORS) { this.doors[d.id] = { open: !!d.open || !!d.arch, locked: !!d.lock }; if (d.lock) this.nav.setLocked(d.id, true); }
+    // who is working tonight: one at random, or all five
+    const kinds = all ? shuffle(KINDS) : [KINDS.includes(force) && this.debug ? force : pick(KINDS)];
     const names = shuffle(SURNAMES).slice(0, 5);
-    this.ghostName = { first: pick(FIRST), last: names[0] };
-    this.drawers = shuffle(names); // index -> surname
-    this.correctDrawer = this.drawers.indexOf(names[0]) + 1;
-    this.tried = new Set();
+    this.info = kinds.map((kind, i) => ({ kind, first: pick(GHOSTS[kind].first), last: names[i], prefix: GHOSTS[kind].prefix }));
+    this.drawers = shuffle(names); // index -> surname; with one ghost the other four are other dead
+    this.tried = new Set(); this.filled = new Set(); this.rested = 0;
     this.chartBed = 1 + ((rng() * 6) | 0);
     this.items = [];
     let iid = 1;
     const addItem = (k, s) => this.items.push({ id: 'i' + iid++, k, x: s[0], z: s[1], y: s[2], h: null });
-    for (const k of ['key', 'fuse', 'chart', 'doll']) addItem(k, M.ITEM_SPAWNS[k]);
+    for (const k of ['key', 'fuse', 'chart']) addItem(k, M.ITEM_SPAWNS[k]);
+    this.info.forEach((g, o) => { const it = GHOSTS[g.kind].item; addItem('doll', it.at); Object.assign(this.items[this.items.length - 1], { o, nm: it.name, mesh: it.mesh }); });
     addItem('meds', pick(M.ITEM_SPAWNS.meds));
     for (const s of M.ITEM_SPAWNS.bottle) addItem('bottle', s);
     this.tasks = [
@@ -115,7 +119,8 @@ export class Room {
         hidden: null, holdBreath: false, breath: cfg.breath, gasp: 0, item: null, rescuedUsed: false, stepT: 0, workT: 0 });
       i++;
     }
-    this.ghost = new Ghost(this);
+    const gap = ARRIVE_GAP[this.diff] || 150;
+    this.ghosts = kinds.map((k, i) => new Ghost(this, k, i, cfg.grace + i * gap));
     this.scareT = 25 + rng() * 25; this.lastScare = null; this.wv = 0;
     this.phase = 'playing';
     for (const p of this.players.values()) this.send(p, { t: 'start', seed, diff: this.diff, cfg: { breath: cfg.breath, rescue: cfg.rescue, time: cfg.time }, you: { x: p.x, z: p.z, ry: p.ry }, world: this.world() });
@@ -127,16 +132,20 @@ export class Room {
   world() {
     return {
       v: ++this.wv, doors: Object.fromEntries(Object.entries(this.doors).map(([k, d]) => [k, [d.open ? 1 : 0, d.locked ? 1 : 0]])),
-      items: this.items.map((i) => ({ id: i.id, k: i.k, x: i.x, y: i.y, z: i.z, h: i.h, txt: i.k === 'chart' ? `Ward A - Bed ${this.chartBed}` : undefined })),
+      items: this.items.map((i) => ({ id: i.id, k: i.k, x: i.x, y: i.y, z: i.z, h: i.h, txt: i.k === 'chart' ? `Ward A - Bed ${this.chartBed}` : undefined, nm: i.nm, mesh: i.mesh, o: i.o })),
       tasks: this.tasks, quota: this.quota, done: this.tasks.filter((t) => t.done).length, power: this.power, fuseFitted: this.fuseFitted, callOn: this.callOn,
       clues: this.clues, mystery: this.mystery, exitOpen: this.exitOpen, jammed: [...this.jammed], drawers: this.drawers, tried: [...this.tried],
       escapeT: this.escapeT,
+      mode: this.mode, gcount: this.ghosts.length, rested: this.rested, filled: [...this.filled], clueTotal: this.mode === 'all' ? 9 : 5,
+      hints: hints(this.info[0], (id) => this.clues.some((c) => c.id === id), this.mode === 'all', this.rested),
+      names: this.mystery ? this.info.map(fullName) : undefined,
     };
   }
   sync() { this.broadcast({ t: 'world', world: this.world() }); }
 
   // ---------------------------------------------------------------- helpers
-  noise(x, z, loud, p) { if (!p || (p.alive && !p.captured && !p.escaped)) this.ghost.stim.push({ x, z, loud }); }
+  get ghost() { return this.ghosts[0]; } // the first (in single mode, the only) ghost
+  noise(x, z, loud, p) { if (!p || (p.alive && !p.captured && !p.escaped)) for (const g of this.ghosts) g.stim.push({ x, z, loud }); }
   setDoor(id, open, by) {
     const d = this.doors[id]; if (d.open === open) return;
     d.open = open;
@@ -164,20 +173,10 @@ export class Room {
     }
     this.sync();
   }
-  clue(id, p) {
-    const text = this.clueText(id);
+  clue(id, p, owner = 0) {
+    const all = this.mode === 'all', text = clueText(id.startsWith('relic') ? 'tag' : id, this.info[owner], all, this.info);
     if (p) this.send(p, { t: 'ev', k: 'note', id, ...text });
     if (!this.clues.find((c) => c.id === id)) { this.clues.push({ id, title: text.title, short: text.short }); this.ev({ k: 'clue', id, by: p ? p.name : null, title: text.title }); this.sync(); }
-  }
-  clueText(id) {
-    const g = this.ghostName, N = g.last.toUpperCase();
-    return {
-      clue_log: { title: 'Night log, nurses\' station', body: `14 Nov - 02:40\nRoom 3 has rung all night again. Matron says leave it.\nShe never asks for anything but the doll.`, short: 'The patient in Room 3 kept calling for a doll.' },
-      clue_orders: { title: 'Standing orders, treatment room', body: `ROOM 3 - sedate when she asks for the child.\nDo NOT answer the call light after midnight.\nBelongings to stay locked away.`, short: 'Staff were ordered to ignore Room 3 and keep her belongings from her.' },
-      clue_file: { title: 'Admission file, records office', body: `${N}, ${g.first} - Room 3\nInfant: stillborn. Patient not to be informed.\nDeceased 14 Nov, 03:12. Body unclaimed - held in morgue.`, short: `Room 3 was ${g.first} ${g.last}. She died at 03:12; her body is still in the morgue.` },
-      call: { title: 'Call panel, Room 3', body: `BED 3 - CALL ACTIVE\nFirst raised 03:12 - 14 NOV\nNever answered.`, short: 'The Room 3 call light has been ringing, unanswered, since 03:12.' },
-      doll: { title: 'Wrist tag tied to the doll', body: `"for my girl"\nProperty of patient, Rm 3 - WITHHELD`, short: 'The doll in the ward cot belonged to the patient in Room 3.' },
-    }[id];
   }
   dropItem(p, makeNoise = true) {
     const it = this.items.find((i) => i.h === p.id);
@@ -209,7 +208,9 @@ export class Room {
   }
   end(win, reason) {
     this.phase = 'ended'; this.stop();
-    this.lastEnd = { t: 'end', win, reason, ghost: `${this.ghostName.first} ${this.ghostName.last}`, elapsed: Math.round(this.elapsed), duties: this.tasks.filter((t) => t.done).length, quota: this.quota, mystery: this.mystery,
+    const all = this.mode === 'all';
+    this.lastEnd = { t: 'end', win, reason, ghost: all ? 'all five' : fullName(this.info[0]), kinds: this.info.map((g) => g.kind), mode: this.mode, rested: this.rested,
+      story: all ? (win ? 'All five are at rest. The hospital is only a building again.' : `${this.rested} of 5 were laid to rest. The others are still working nights.`) : epitaph(this.info[0], win, this.mystery), elapsed: Math.round(this.elapsed), duties: this.tasks.filter((t) => t.done).length, quota: this.quota, mystery: this.mystery,
       players: [...this.players.values()].map((p) => ({ name: p.name, status: p.escaped ? 'Clocked out' : p.alive ? 'Left behind' : 'Taken' })) };
     this.broadcast(this.lastEnd);
     this.sendLobby();
@@ -219,7 +220,7 @@ export class Room {
   tick(dt) {
     if (this.phase !== 'playing') return;
     this.elapsed += dt; this.timeLeft -= dt;
-    const g = this.ghost, cfg = this.cfg;
+    const cfg = this.cfg;
     for (const p of this.players.values()) {
       if (!p.alive || p.escaped || p.captured) continue;
       if (!p.hidden) {
@@ -237,18 +238,20 @@ export class Room {
         if (p.breath <= 0) { p.breath = 0; p.holdBreath = false; p.gasp = 3; this.noise(p.x, p.z, LOUD.gasp, p); this.ev({ k: 'gasp', pid: p.id, x: p.x, z: p.z }); }
       } else { p.holdBreath = p.holdBreath && !!p.hidden && p.gasp <= 0; if (!p.holdBreath) p.breath = Math.min(cfg.breath, p.breath + dt * 0.7); }
     }
-    g.update(dt);
+    for (const g of this.ghosts) g.update(dt);
     this.director(dt);
     if (this.escapeT !== null) { this.escapeT -= dt; if (this.escapeT <= 0) return this.end(true, 'escaped'); }
     if (this.timeLeft <= 0) return this.end([...this.players.values()].some((p) => p.escaped), 'time');
     this.checkEnd();
     if (this.phase !== 'playing') return;
-    this.broadcast({
+    const snap = {
       t: 's', st: Date.now(), tl: Math.ceil(this.timeLeft),
-      g: { x: +g.x.toFixed(2), z: +g.z.toFixed(2), ry: +g.ry.toFixed(2), a: g.anim(), v: +g.vis.toFixed(2), s: g.state, vic: g.victim, spot: g.spot && ['toSpot', 'listen', 'open'].includes(g.state) ? g.spot : null },
+      gs: this.ghosts.map((g) => ({ i: g.i, k: g.kind, x: +g.x.toFixed(2), z: +g.z.toFixed(2), ry: +g.ry.toFixed(2), a: g.anim(), v: +g.vis.toFixed(2), s: g.state, vic: g.victim, spot: g.spot && ['toSpot', 'listen', 'open'].includes(g.state) ? g.spot : null })),
       p: [...this.players.values()].map((p) => [p.id, +p.x.toFixed(2), +p.z.toFixed(2), +p.ry.toFixed(2), +p.rx.toFixed(2), p.mode, p.flash ? 1 : 0,
         p.escaped ? 'e' : !p.alive ? 'd' : p.captured ? 'c' : p.hidden ? 'h' : 'a', p.hidden, +p.breath.toFixed(1), p.holdBreath ? 1 : 0, p.rescuedUsed ? 1 : 0, p.pt || 0, p.offline ? 1 : 0]),
-    });
+    };
+    snap.g = snap.gs[0]; // older clients and the test bots read a single ghost
+    this.broadcast(snap);
   }
 
   // Ambient, non-lethal scares. The director never feeds positions to the ghost's hunting logic.
@@ -257,7 +260,7 @@ export class Room {
     if (this.scareT > 0) return;
     const live = this.active().filter((p) => !p.captured);
     this.scareT = (35 + this.rng() * 50) * (this.cfg.special[0] / 28 * 0.5 + 0.5);
-    if (!live.length || ['grab', 'drag', 'take', 'chase', 'notice'].includes(this.ghost.state)) return;
+    if (!live.length || this.ghosts.some((g) => ['grab', 'drag', 'take', 'chase', 'notice'].includes(g.state))) return;
     const p = live[(this.rng() * live.length) | 0];
     const room = M.roomAt(p.x, p.z);
     let opts = ['flicker', 'knock', 'whisper', 'slam', 'bell', 'steps'].filter((o) => o !== this.lastScare);
@@ -286,14 +289,14 @@ export class Room {
     if (m.t === 'mic') { if (!!m.on !== !!p.mic) { p.mic = !!m.on; this.sendLobby(); } return; }
     if (this.phase === 'lobby') {
       if (m.t === 'diff' && p.id === this.hostId && DIFF[m.diff]) { this.diff = m.diff; this.sendLobby(); }
+      else if (m.t === 'mode' && p.id === this.hostId && (m.mode === 'one' || m.mode === 'all')) { this.mode = m.mode; this.sendLobby(); }
       else if (m.t === 'name') { p.name = String(m.name || '').slice(0, 16).trim() || p.name; this.sendLobby(); }
-      else if (m.t === 'start' && p.id === this.hostId) this.startRound(m.seed);
+      else if (m.t === 'start' && p.id === this.hostId) this.startRound(m.seed, m.kind);
       return;
     }
     if (this.phase === 'ended') { if (m.t === 'lobby' && p.id === this.hostId) { this.phase = 'lobby'; this.sendLobby(); } return; }
     if (m.t === 'debug' && this.debug) return this.onDebug(p, m);
     if (!p.alive || p.escaped || p.captured) return;
-    const g = this.ghost;
     switch (m.t) {
       case 'pos':
         if (!p.hidden) { if (isFinite(m.x) && isFinite(m.z)) { p.x = m.x; p.z = m.z; } p.mode = m.m; p.pt = Date.now(); }
@@ -320,8 +323,8 @@ export class Room {
       }
       case 'unhide': if (p.hidden) { const h = M.hideById(p.hidden); p.hidden = null; p.holdBreath = false; p.x = h.ex; p.z = h.ez; this.noise(p.x, p.z, LOUD.hide, p); this.ev({ k: 'unhide', pid: p.id, spot: h.id, x: h.ex, z: h.ez }); } break;
       case 'rescue': {
-        const v = this.players.get(m.pid);
-        if (v && v.captured && g.victim === v.id && g.state === 'drag' && !p.hidden && d2(p, v.x, v.z) < 3.4) {
+        const v = this.players.get(m.pid), g = this.ghosts.find((q) => v && q.victim === v.id && q.state === 'drag');
+        if (v && v.captured && g && !p.hidden && d2(p, v.x, v.z) < 3.4) {
           v.captured = false; v.rescuedUsed = true; g.rescued();
           this.ev({ k: 'rescued', pid: v.id, by: p.id, name: v.name, byName: p.name, x: v.x, z: v.z });
         }
@@ -359,13 +362,13 @@ export class Room {
       this.noise(p.x, p.z, LOUD.pickup, p);
       this.ev({ k: 'pickup', pid: p.id, item: it.k });
       if (it.k === 'fuse') this.finish('fuse', p);
-      if (it.k === 'doll') this.clue('doll', p);
+      if (it.k === 'doll') this.clue(this.mode === 'all' ? 'relic' + it.o : 'relic', p, it.o);
       this.sync();
     } else if (m.kind === 'hide') {
       const h = M.hideById(m.id);
       if (!h || this.jammed.has(h.id) || d2(p, h.ex, h.ez) > REACH + 0.5) return;
       if ([...this.players.values()].some((q) => q.hidden === h.id)) return this.toast('Someone is already hiding there.', p);
-      this.ghost.onHide(p, h.id);
+      for (const g of this.ghosts) g.onHide(p, h.id);
       p.hidden = h.id; p.x = h.x; p.z = h.z; p.mode = 'still';
       this.noise(h.x, h.z, LOUD.hide, p);
       this.ev({ k: 'hide', pid: p.id, spot: h.id, x: h.x, z: h.z });
@@ -400,18 +403,31 @@ export class Room {
         this.finish('chart', p);
       } else if (s.k === 'drawer') {
         if (this.mystery) return;
-        if (!held || held.k !== 'doll') return this.send(p, { t: 'ev', k: 'note', id: s.id, title: `Morgue drawer ${s.n}`, body: `${this.drawers[s.n - 1].toUpperCase()}\n${this.tried.has(s.n) ? 'The drawer is empty.' : 'Unclaimed.'}` });
-        if (this.tried.has(s.n)) return this.toast('Not this one.', p);
-        if (s.n === this.correctDrawer) {
+        const all = this.mode === 'all', name = this.drawers[s.n - 1];
+        if (!held || held.k !== 'doll') return this.send(p, { t: 'ev', k: 'note', id: s.id, title: `Morgue drawer ${s.n}`, body: `${name.toUpperCase()}\n${this.filled.has(s.n) ? 'At rest.' : all || !this.tried.has(s.n) ? 'Unclaimed.' : 'The drawer is empty.'}` });
+        if (this.filled.has(s.n)) return this.toast('Someone already rests here.', p);
+        const tk = all ? `${s.n}:${held.o}` : s.n, owner = this.info[held.o];
+        if (this.tried.has(tk)) return this.toast('Not this one.', p);
+        if (name === owner.last) {
           this.items.splice(this.items.indexOf(held), 1); p.item = null;
-          this.mystery = true;
-          this.ghost.enraged = true;
-          if (!['grab', 'drag', 'take', 'chase', 'notice'].includes(this.ghost.state)) this.ghost.relocate();
-          this.ev({ k: 'mystery', by: p.name, name: `${this.ghostName.first} ${this.ghostName.last}` });
+          const g = this.ghosts[held.o];
+          this.filled.add(s.n);
+          if (all) {
+            this.rested++; g.layToRest();
+            this.ev({ k: 'rested', by: p.name, name: fullName(owner), kind: owner.kind, n: this.rested });
+            const left = this.ghosts.filter((q) => q.state !== 'rest');
+            if (left.length === 1) left[0].enraged = true; // the last one left takes it badly
+            if (!left.length) { this.mystery = true; this.ev({ k: 'mystery', by: p.name, name: 'All five', all: true }); }
+          } else {
+            this.mystery = true;
+            g.enraged = true;
+            if (!['grab', 'drag', 'take', 'chase', 'notice'].includes(g.state)) g.relocate();
+            this.ev({ k: 'mystery', by: p.name, name: fullName(owner), kind: owner.kind });
+          }
           this.updateExit();
         } else {
-          this.tried.add(s.n);
-          this.noise(s.x, s.z, LOUD.wrong); // she always hears this
+          this.tried.add(tk);
+          this.noise(s.x, s.z, LOUD.wrong); // they always hear this
           this.ev({ k: 'wrong', x: s.x, z: s.z, n: s.n });
           this.sync();
         }
@@ -420,16 +436,16 @@ export class Room {
   }
 
   onDebug(p, m) {
-    const g = this.ghost;
-    if (m.cmd === 'freeze') g.frozen = !!m.on;
-    else if (m.cmd === 'deaf') g.deaf = !!m.on;
-    else if (m.cmd === 'holdgrab') g.holdGrab = !!m.on;
+    const g = this.ghosts[m.gi ?? 0] || this.ghost;
+    if (m.cmd === 'freeze') for (const q of this.ghosts) q.frozen = !!m.on;
+    else if (m.cmd === 'deaf') for (const q of this.ghosts) q.deaf = !!m.on;
+    else if (m.cmd === 'holdgrab') for (const q of this.ghosts) q.holdGrab = !!m.on;
     else if (m.cmd === 'ghost') { g.x = m.x; g.z = m.z; if (m.ry !== undefined) g.ry = m.ry; g.path = []; g.vis = 1; g.set(m.state || 'idle', { idleFor: m.idleFor ?? 999, ...(m.data || {}) }); }
     else if (m.cmd === 'tp') { p.x = m.x; p.z = m.z; this.send(p, { t: 'ev', k: 'tp', x: m.x, z: m.z }); }
     else if (m.cmd === 'time') this.timeLeft = m.v;
     else if (m.cmd === 'power') this.setPower(true);
     else if (m.cmd === 'state') this.send(p, { t: 'debug', ghost: { state: g.state, x: g.x, z: g.z, target: g.target, victim: g.victim, spot: g.spot, queue: g.queue, trips: g.trips },
-      correctDrawer: this.correctDrawer, chartBed: this.chartBed, quota: this.quota, timeLeft: this.timeLeft, jammed: [...this.jammed] });
+      kinds: this.info.map((q) => q.kind), ghosts: this.ghosts.map((q) => ({ kind: q.kind, state: q.state, x: q.x, z: q.z })), correctDrawer: this.drawers.indexOf(this.info[0].last) + 1, chartBed: this.chartBed, quota: this.quota, timeLeft: this.timeLeft, jammed: [...this.jammed] });
     else if (m.cmd === 'scare') { this.scareT = 0; }
   }
 }

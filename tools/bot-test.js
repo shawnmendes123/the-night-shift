@@ -47,7 +47,7 @@ async function party(port, n, diff = 'medium') {
   for (let i = 1; i < n; i++) bots.push(await new Bot(port, 'Bot' + (i + 1)).connect(bots[0].code));
   bots[0].send({ t: 'diff', diff });
   await sleep(60);
-  bots[0].send({ t: 'start', seed: 1234 });
+  bots[0].send({ t: 'start', seed: 1234, kind: 'mother' });
   await bots[0].until(() => bots.every((b) => b.started && b.snap));
   return bots;
 }
@@ -77,7 +77,7 @@ async function main() {
     ok(host.lobby.players.some((p) => p.name === 'Renamed'), 'display names sync');
     others[0].send({ t: 'start' }); await sleep(120);
     ok(!host.started, 'non-host cannot start');
-    host.send({ t: 'start', seed: 7 });
+    host.send({ t: 'start', seed: 7, kind: 'mother' });
     await host.until(() => [host, ...others].every((b) => b.started && b.snap));
     ok([host, ...others].every((b) => b.started), 'round starts for all 5');
     const late = await new Bot(port, 'Mid').connect(host.code);
@@ -152,7 +152,7 @@ async function main() {
     // doll + drawers
     const doll = a.item('doll');
     a.pos(12.6, 7.2); a.use('item', doll.id);
-    ok(await a.until(() => a.world.clues.find((c) => c.id === 'doll')), 'picking up the doll reveals its tag');
+    ok(await a.until(() => a.world.clues.find((c) => c.id === 'relic')), 'picking up the doll reveals its tag');
     const wrongD = st.correctDrawer === 1 ? 2 : 1, dr = (n) => M.stationById('drawer' + n);
     const mark = a.evs.length;
     a.pos(dr(wrongD).x, 32.3); a.use('station', 'drawer' + wrongD);

@@ -53,18 +53,27 @@ function mergeGeos(geos) {
 }
 function angDiff(a, b) { let d = a - b; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; return d; }
 
+// Each ghost is the same articulated body dressed and carried differently.
+const LOOK = {
+  mother: { gown: 0x9a9a94, skin: 0x6e6b61, hair: 'long', eyes: true, scale: [1, 1, 1] },
+  blind: { gown: 0xbab7ac, skin: 0x7a766c, hair: 'long', eyes: false, scale: [1, 0.98, 1], bandage: true },
+  matron: { gown: 0x283349, skin: 0x6d6a61, hair: 'bun', eyes: true, scale: [1.04, 1.01, 1.04], cap: true, apron: true, upright: true },
+  surgeon: { gown: 0x46685a, skin: 0x7c8077, hair: 'none', eyes: true, scale: [1.08, 1.07, 1.08], scrubs: true, upright: true },
+  mimic: { gown: 0x8b8981, skin: 0x8c897f, hair: 'long', eyes: false, scale: [0.92, 1.13, 0.92], faceless: true },
+};
 export class GhostModel {
-  constructor(scene) {
-    this.root = new THREE.Group(); scene.add(this.root);
+  constructor(scene, kind = 'mother') {
+    this.kind = kind; const L = (this.look = LOOK[kind] || LOOK.mother);
+    this.scene = scene; this.root = new THREE.Group(); scene.add(this.root);
     this.mats = [];
     const M = (o) => { const m = new THREE.MeshStandardMaterial({ transparent: true, ...o }); m.forceSinglePass = true; this.mats.push(m); return m; };
     const tex = new THREE.TextureLoader();
     const faceTex = tex.load('/assets/ghost-face.jpg'); faceTex.colorSpace = THREE.SRGBColorSpace; faceTex.anisotropy = 4;
     const clothTex = tex.load('/assets/ghost-gown.jpg'); clothTex.colorSpace = THREE.SRGBColorSpace;
-    const skin = M({ color: 0x6e6b61, map: clothTex, bumpMap: clothTex, bumpScale: .001, roughness: 0.95 }), dark = M({ color: 0x0a0908, roughness: 0.7 });
+    const skin = M({ color: L.skin, map: clothTex, bumpMap: clothTex, bumpScale: .001, roughness: 0.95 }), dark = M({ color: 0x0a0908, roughness: 0.7 });
     const hairM = M({ color: 0x070606, roughness: 0.85, side: THREE.DoubleSide });
-    const gownM = M({ color: 0x9a9a94, map: clothTex, bumpMap: clothTex, bumpScale: 0.008, alphaMap: gownAlpha(), alphaTest: 0.5, side: THREE.DoubleSide, roughness: 1 });
-    const faceM = M({ color: 0xa8a8a2, map: faceTex, bumpMap: faceTex, bumpScale: 0.002, roughness: 0.96 });
+    const gownM = L.upright ? M({ color: L.gown, map: clothTex, bumpMap: clothTex, bumpScale: 0.004, side: THREE.DoubleSide, roughness: 0.95 }) : M({ color: L.gown, map: clothTex, bumpMap: clothTex, bumpScale: 0.008, alphaMap: gownAlpha(), alphaTest: 0.5, side: THREE.DoubleSide, roughness: 1 }); // staff uniforms are whole; patients' gowns are in ribbons
+    const faceM = L.faceless ? M({ color: 0xb9b6ac, roughness: 0.9 }) : M({ color: 0xa8a8a2, map: faceTex, bumpMap: faceTex, bumpScale: 0.002, roughness: 0.96 });
     const eyeM = new THREE.MeshBasicMaterial({ color: 0xd9e6ff, transparent: true }); this.eyeM = eyeM;
     const J = (parent, x, y, z) => { const g = new THREE.Group(); g.position.set(x, y, z); parent.add(g); return g; };
     const limb = (parent, len, r0, r1, mat = skin) => { const shape=new THREE.CylinderGeometry(r0,r1,len,16,10), ps=shape.attributes.position;
@@ -74,7 +83,7 @@ export class GhostModel {
     j.hips = J(this.root, 0, 1.12, 0);
     j.spine = J(j.hips, 0, 0, 0);
     const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.1, 0.62, 9), skin); torso.position.y = 0.31; torso.scale.z = 0.62; torso.castShadow = true; j.spine.add(torso);
-    const bodM = M({ color: 0x9a9a94, map: clothTex, bumpMap: clothTex, bumpScale: 0.008, roughness: 1, side: THREE.DoubleSide });
+    const bodM = M({ color: L.gown, map: clothTex, bumpMap: clothTex, bumpScale: 0.008, roughness: 1, side: THREE.DoubleSide });
     const bodice = new THREE.Mesh(new THREE.CylinderGeometry(0.155, 0.15, 0.66, 12, 1, true), bodM); bodice.position.y = 0.3; bodice.scale.z = 0.68; bodice.castShadow = true; j.spine.add(bodice);
     for (let i = 0; i < 5; i++) { const rib = new THREE.Mesh(new THREE.TorusGeometry(0.115 - i * 0.004, 0.011, 4, 12, Math.PI), skin); rib.position.set(0, 0.5 - i * 0.06, 0.012); rib.rotation.x = Math.PI / 2; rib.rotation.z = Math.PI; rib.scale.y = 0.7; j.spine.add(rib); }
     // gown: open cone with ragged, see-through hem
@@ -112,10 +121,10 @@ export class GhostModel {
     this.face = new THREE.Mesh(geo,faceM); this.face.position.y=.07; this.face.castShadow=true; j.head.add(this.face);
     j.jaw = J(j.head,0,.02,.02);
     this.eyes=[];
-    for(const sx of [-1,1]) {const e=new THREE.Mesh(new THREE.SphereGeometry(.0022,8,6),eyeM); e.position.set(sx*.043,.181,.062);j.head.add(e);this.eyes.push(e);}
+    if (L.eyes) for(const sx of [-1,1]) {const e=new THREE.Mesh(new THREE.SphereGeometry(.0022,8,6),eyeM); e.position.set(sx*.043,.181,.062);j.head.add(e);this.eyes.push(e);}
     // hair: long strips hanging over the face and shoulders
     this.hair = []; this.hairRoot = J(j.head, 0, 0, 0);
-    for (let i = 0; i < 22; i++) {
+    for (let i = 0; i < (L.hair === 'long' ? 22 : 0); i++) {
       if (Math.cos((i/22)*Math.PI*2) > .45 && i % 5 !== 0) continue;
       const a = (i / 22) * Math.PI * 2 + (i % 2) * 0.1, front = Math.cos(a) > 0.2;
       const len = (front ? 0.5 : 0.85) + ((i * 37) % 10) * 0.03, wdt = 0.045 + ((i * 13) % 5) * 0.008;
@@ -135,7 +144,8 @@ export class GhostModel {
     // Remove front and lower triangles so the scalp hugs the crown and back.
     const si=scalpGeo.index, keep=[];
     for(let i=0;i<si.count;i+=3){const ids=[si.getX(i),si.getX(i+1),si.getX(i+2)];if(ids.every(k=>sp.getY(k)>(sp.getZ(k)>.025?.21:.035)))keep.push(...ids);}
-    scalpGeo.setIndex(keep);scalpGeo.computeVertexNormals();const scalpMat=new THREE.MeshBasicMaterial({color:0x050505,transparent:true,side:THREE.DoubleSide});this.mats.push(scalpMat);j.head.add(new THREE.Mesh(scalpGeo,scalpMat));
+    scalpGeo.setIndex(keep);scalpGeo.computeVertexNormals();const scalpMat=new THREE.MeshBasicMaterial({color:0x050505,transparent:true,side:THREE.DoubleSide});this.mats.push(scalpMat);if (L.hair !== 'none') j.head.add(new THREE.Mesh(scalpGeo,scalpMat));
+    this.dress(L, M, J, gownM);
     const shawl = new THREE.Mesh(new THREE.CylinderGeometry(.08,.25,.23,40,8,true),gownM);
     shawl.position.set(0,-.035,0); shawl.scale.z=.7; j.chest.add(shawl);
     // arms: too long
@@ -155,6 +165,27 @@ export class GhostModel {
     this.qa = new THREE.Quaternion(); this.qb = new THREE.Quaternion(); this.qi = new THREE.Quaternion(); this.up = new THREE.Vector3(0, 1, 0);
     this.t = 0; this.yaw = 0; this.headYaw = 0; this.snapT = 0; this.cyc = 0; this.pose = {}; this.anim = 'idle'; this.vis = 0; this.q = 0; this.twitch = 0; this.stepCb = null; this.lastStep = 0;
     this.root.visible = false;
+  }
+
+  // Per-ghost costume pieces.
+  dress(L, M, J, gownM) {
+    const j = this.j, add = (parent, geo, mat, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = true; parent.add(m); return m; };
+    if (L.bandage) { // dressing over both eyes, seeping
+      const band = add(j.head, new THREE.CylinderGeometry(0.124, 0.124, 0.06, 28, 1, true), M({ color: 0xd9d1bc, roughness: 1, side: THREE.DoubleSide }), 0, 0.183, 0); band.scale.z = 0.92;
+      const seep = add(j.head, new THREE.CylinderGeometry(0.1255, 0.1255, 0.018, 28, 1, true, -0.9, 1.8), M({ color: 0x5c241c, roughness: 0.6, side: THREE.DoubleSide }), 0, 0.176, 0); seep.scale.z = 0.93;
+      const knot = add(j.head, new THREE.SphereGeometry(0.03, 10, 8), M({ color: 0xcfc6ae, roughness: 1 }), 0, 0.19, -0.115); knot.scale.set(1.3, 0.8, 0.6);
+    }
+    if (L.cap) { // starched matron's cap and apron
+      const cap = add(j.head, new THREE.CylinderGeometry(0.08, 0.11, 0.075, 18), M({ color: 0xe6e2d6, roughness: 0.9 }), 0, 0.29, -0.01); cap.rotation.x = -0.25; cap.scale.z = 0.85;
+      add(j.head, new THREE.SphereGeometry(0.058, 12, 10), M({ color: 0x0b0a09, roughness: 0.8 }), 0, 0.2, -0.12);
+    }
+    if (L.apron) { const ap = add(j.hips, new THREE.PlaneGeometry(0.27, 0.74), M({ color: 0xd8d3c5, roughness: 1, side: THREE.DoubleSide }), 0, -0.24, 0.2); ap.rotation.x = -0.12; const bib = add(j.chest, new THREE.PlaneGeometry(0.2, 0.26), M({ color: 0xd8d3c5, roughness: 1, side: THREE.DoubleSide }), 0, -0.14, 0.115); bib.rotation.x = 0.05; }
+    if (L.scrubs) { // theatre cap and mask
+      const capM = M({ color: 0x4f7363, roughness: 1, side: THREE.DoubleSide });
+      const cap = add(j.head, new THREE.SphereGeometry(0.13, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2), capM, 0, 0.15, -0.005); cap.scale.set(1, 0.95, 0.95);
+      const mask = add(j.head, new THREE.CylinderGeometry(0.122, 0.118, 0.1, 22, 1, true, -Math.PI / 2, Math.PI), M({ color: 0xa9beb2, roughness: 1, side: THREE.DoubleSide }), 0, 0.105, 0.004); mask.scale.z = 0.93;
+      for (const sx of [-1, 1]) { const tie = add(j.head, new THREE.CylinderGeometry(0.002, 0.002, 0.16, 4), capM, sx * 0.1, 0.11, -0.09); tie.rotation.x = 0.6; }
+    }
   }
 
   // Target joint angles for an animation at cycle time c. Returns a flat pose object.
@@ -202,6 +233,13 @@ export class GhostModel {
       P.spx=.65+snap*.18; P.hdy=Math.sin(t*19)*.045;
       P.elL=-.85-snap*.25; P.elR=-1.05; P.fing=-.7-snap*.5;
     }
+    const L = this.look, calm = ['idle', 'walk', 'stare', 'look', 'listen'].includes(anim);
+    if (L.upright && calm) { P.spx *= 0.25; P.chx *= 0.3; P.nx *= 0.3; P.nz *= 0.15; P.hy += 0.02; if (anim === 'walk' && this.kind === 'surgeon') { P.shL = [0.35, 0, 0.12]; P.shR = [0.35, 0, -0.12]; P.elL = P.elR = -0.9; } }
+    if (L.bandage && (calm || anim === 'run')) { // feels her way, head cocked to listen
+      P.shL = [(anim === 'run' ? -1.5 : -1.05) + 0.12 * s(t * 1.7), 0, 0.18]; P.shR = [(anim === 'run' ? -1.4 : -0.85) + 0.1 * s(t * 1.3 + 1), 0, -0.18]; P.elL = P.elR = -0.2; P.fing = -0.2 + 0.3 * s(t * 5);
+      P.nz = 0.95 + 0.08 * s(t * 0.6); P.nx = -0.05; P.hdy = 0.35 * s(t * 0.45);
+    }
+    if (this.kind === 'mimic' && anim === 'stare') { P.hdy = Math.PI; P.nz = 0.1; P.jaw = 0.9; } // the head turns all the way round
     if (anim === 'drag' || anim === 'take') {
       if(anim==='take') {P.spx=.65;P.shR=[.9,0,-.25];P.elR=-.1;}
       P.hdy=3.04; P.nz=.42+Math.sin(t*2.3)*.07; P.nx=-.13;
@@ -264,10 +302,13 @@ export class GhostModel {
     const e = vis * vis * (3 - 2 * vis);
     this.root.position.set(s.x, fy - (1 - e) * 0.15, s.z);
     this.root.rotation.y = this.yaw;
-    this.root.scale.set(1 + (1 - e) * 0.5 + (vis < 1 ? Math.sin(this.t * 60) * 0.03 : 0), Math.max(0.03, e), 1 + (1 - e) * 0.5);
+    const [sx, sy, sz] = this.look.scale, glitch = this.kind === 'mimic' && Math.random() < dt * 1.2 ? 0.12 : 0;
+    this.root.scale.set((1 + (1 - e) * 0.5 + (vis < 1 ? Math.sin(this.t * 60) * 0.03 : 0)) * sx, Math.max(0.03, e) * sy * (1 + glitch * 0.3), (1 + (1 - e) * 0.5) * sz);
+    if (glitch) this.root.position.x += (Math.random() - 0.5) * glitch;
     for (const m of this.mats) m.opacity = Math.min(1, e * 1.3);
     const solid = e > 0.995; if (solid !== this._solid) { this._solid = solid; for (const m of this.mats) { if (m.isMeshBasicMaterial) continue; m.transparent = !solid; m.needsUpdate = true; } }
     this.eyeM.opacity = e;
   }
   headWorld(v) { return this.j.head.getWorldPosition(v); }
+  dispose() { this.scene.remove(this.root); }
 }
