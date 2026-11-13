@@ -108,5 +108,9 @@ summary { cursor: pointer; text-transform: uppercase; letter-spacing: .12em; fon
 #paused { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0, 0, 0, .55); pointer-events: auto; cursor: pointer; text-align: center; }
 #paused h3 { font-family: var(--cond); font-size: 30px; letter-spacing: .1em; text-transform: uppercase; margin: 0 0 8px; color: var(--paper); }
 #paused .fine, #paused .keys b { color: #b9c2b8; }
+#reconnect { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; background: rgba(0, 0, 0, .72); text-align: center; color: var(--paper); }
+#reconnect h3 { font-family: var(--cond); font-size: 34px; letter-spacing: .1em; text-transform: uppercase; margin: 0 0 10px; }
+#reconnect p { margin: 4px 0; }
+#reconnect .fine { color: #b9c2b8; }
 #fade { position: fixed; inset: 0; background: #000; opacity: 0; pointer-events: none; z-index: 15; }
 @media (prefers-reduced-motion: reduce) { .toast { animation-duration: 5.5s; } .sheet { transform: none; } }

@@ -125,19 +125,55 @@ function connect(code) {
   localStorage.setItem('ns_name', name);
   $('menuErr').textContent = '';
   sound.init();
-  const ws = (S.ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host));
-  ws.onopen = () => send({ t: 'join', name, code });
-  ws.onmessage = (e) => onMsg(JSON.parse(e.data));
-  ws.onclose = () => { if (S.phase !== 'menu') { show('menu'); $('menuErr').textContent = 'Connection to the server was lost.'; } S.ws = null; S.id = null; };
-  ws.onerror = () => { $('menuErr').textContent = 'Could not reach the server.'; };
+  S.session = null; setSession(null);
+  openSocket({ t: 'join', name, code });
 }
+// One live socket at a time. If it drops while we are in a shift, we reconnect and resume instead of quitting.
+function openSocket(join) {
+  const ws = (S.ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host));
+  ws.onopen = () => { S.lastRx = performance.now(); ws.send(JSON.stringify(join)); };
+  ws.onmessage = (e) => { S.lastRx = performance.now(); onMsg(JSON.parse(e.data)); };
+  ws.onclose = () => { if (S.ws !== ws) return; S.ws = null; lostConnection(); };
+  ws.onerror = () => { if (!S.session && !S.recon) $('menuErr').textContent = 'Could not reach the server.'; };
+}
+function setSession(v) { try { v ? sessionStorage.setItem('ns_session', JSON.stringify(v)) : sessionStorage.removeItem('ns_session'); } catch {} }
+function lostConnection() {
+  if (S.session) return reconnect();
+  if (S.phase !== 'menu') { show('menu'); $('menuErr').textContent = 'Connection to the server was lost.'; }
+  S.id = null;
+}
+// Retry for about a minute (the server keeps your place for 75 s). Backs off gently: 0.5, 1, 2, 3, 3, 3 ... seconds.
+function reconnect() {
+  if (!S.session) return;
+  if (!S.recon) { S.recon = { tries: 0, t0: performance.now() }; S.recon.showT = setTimeout(() => $('reconnect').classList.remove('hidden'), 1500); } // quick blips stay invisible
+  const R = S.recon;
+  if (performance.now() - R.t0 > 70000) return giveUp('Could not reconnect to the server. Check your internet, then host or join a new shift.');
+  $('reconText').textContent = R.tries ? `Reconnecting... (attempt ${R.tries + 1})` : 'Reconnecting...';
+  clearTimeout(R.timer);
+  R.timer = setTimeout(() => { R.tries++; const s = S.session; if (s) openSocket({ t: 'join', name: s.name, code: s.code, resume: { id: s.id, key: s.key } }); }, [150, 600, 1200, 2000][R.tries] || 3000);
+}
+function reconnected() { if (S.recon) { clearTimeout(S.recon.timer); clearTimeout(S.recon.showT); } S.recon = null; $('reconnect').classList.add('hidden'); }
+function giveUp(msg) {
+  reconnected(); S.session = null; setSession(null);
+  if (S.ws) { const w = S.ws; S.ws = null; w.onclose = null; try { w.close(); } catch {} }
+  show('menu'); $('menuErr').textContent = msg; S.id = null;
+}
+// Heartbeat. Pings let both sides notice a dead connection fast; the periodic page request keeps a free host
+// (which only counts new requests as activity) from putting the server to sleep in the middle of a round.
+setInterval(() => {
+  if (!S.ws || S.ws.readyState !== 1) return;
+  send({ t: 'ping' });
+  const quiet = performance.now() - (S.lastRx || 0);
+  if (S.session && quiet > (S.phase === 'game' ? 6000 : 30000)) { const w = S.ws; S.ws = null; w.onclose = null; try { w.close(); } catch {} reconnect(); }
+}, 3000);
+setInterval(() => { if (S.session && S.ws && S.ws.readyState === 1) fetch('/health?k=' + Date.now(), { cache: 'no-store' }).catch(() => {}); }, 4 * 60 * 1000);
 function send(m) { if (S.ws && S.ws.readyState === 1) S.ws.send(JSON.stringify(m)); }
 window.NS.send = send;
 
 function onMsg(m) {
   switch (m.t) {
-    case 'err': $('menuErr').textContent = m.msg; S.ws && S.ws.close(); break;
-    case 'welcome': S.id = m.id; S.code = m.code; S.debug = m.debug; history.replaceState(null, '', '?room=' + m.code + (NOLOCK ? '&nolock' : '')); break;
+    case 'err': if (S.recon || m.gone) { giveUp(m.msg); break; } $('menuErr').textContent = m.msg; S.ws && S.ws.close(); break;
+    case 'welcome': S.id = m.id; S.code = m.code; S.debug = m.debug; S.session = { code: m.code, id: m.id, key: m.key, name: $('name').value.trim() || (S.session && S.session.name) || 'Nurse' }; setSession(S.session); if (m.resumed) { const long = S.recon && performance.now() - S.recon.t0 > 1500; reconnected(); if (S.phase === 'game' && long) toast('Reconnected.'); } history.replaceState(null, '', '?room=' + m.code + (NOLOCK ? '&nolock' : '')); break;
     case 'lobby': S.lobby = m; S.diff = m.diff; if (m.phase === 'lobby' && S.phase !== 'lobby') show('lobby'); renderLobby(); if (S.phase === 'end') renderEndButtons(); break;
     case 'start': startRound(m); break;
     case 'world': applyWorld(m.world); break;
@@ -167,7 +203,7 @@ function renderLobby() {
   const host = L.host === S.id;
   $('lobbyCode').textContent = S.code;
   $('lobbyLink').textContent = location.origin + '/?room=' + S.code;
-  $('roster').innerHTML = L.players.map((p) => `<li>${esc(p.name)}${p.id === L.host ? '<span class="tag">charge nurse (host)</span>' : ''}${p.id === S.id ? '<span class="tag">you</span>' : ''}</li>`).join('');
+  $('roster').innerHTML = L.players.map((p) => `<li>${esc(p.name)}${p.id === L.host ? '<span class="tag">charge nurse (host)</span>' : ''}${p.id === S.id ? '<span class="tag">you</span>' : ''}${p.offline ? '<span class="tag">reconnecting</span>' : ''}</li>`).join('');
   $('diffs').innerHTML = Object.entries(DIFF).map(([k, d]) => `<button data-d="${k}" class="${k === L.diff ? 'on' : ''}" ${host ? '' : 'disabled'}>${d.label}</button>`).join('');
   const d = DIFF[L.diff];
   $('diffNote').textContent = `${d.quota} of 6 duties, ${Math.round(d.time / 60)} minutes, ${d.rescue}s to pull a caught teammate free${d.jammed ? `, ${Math.round(d.jammed * 100)}% of hiding spots jammed` : ''}.`;
@@ -192,6 +228,7 @@ if (Q.get('room')) $('code').value = Q.get('room').toUpperCase().slice(0, 4);
 
 // ====================================================================== round start / end
 function startRound(m) {
+  if (m.resume && S.phase === 'game' && S.cfg) { snaps.length = 0; S.clk = undefined; applyWorld(m.world); return; }
   sound.init();
   S.cfg = m.cfg; S.diff = m.diff; S.snap = null; S.spec = null; S.st = 'a'; S.spot = null; S.note = false; S.hold = null; S.capT = 0; S.rescued = 0;
   Object.assign(S.me, { x: m.you.x, z: m.you.z, ry: m.you.ry, rx: 0, crouch: false, flash: true, stamina: STAMINA.max, mode: 'still', winded: false });
@@ -202,8 +239,8 @@ function startRound(m) {
   $('toasts').innerHTML = ''; $('note').classList.add('hidden'); $('spectate').classList.add('hidden'); $('hideFx').classList.add('hidden');
   show('game');
   S.fade = 1; S.fadeTo = 0; sound.setDrone(true);
-  toast('00:00 - NIGHT SHIFT BEGINS', 'big');
-  toast(`Complete ${m.world.quota} duties. Find out what she wants. Clock out through the staff exit.`);
+  if (!m.resume) toast('00:00 - NIGHT SHIFT BEGINS', 'big'); else toast('Reconnected to your shift.');
+  if (!m.resume) toast(`Complete ${m.world.quota} duties. Find out what she wants. Clock out through the staff exit.`);
   snaps.length = 0; S.clk = undefined; S.jit = 0; hudCache.clear(); S.perf = { acc: 0, n: 0, good: 0, lastDown: -99 };
   precompile();
   if (!NOLOCK) canvas.requestPointerLock?.();
@@ -535,7 +572,7 @@ function updateHud(dt, t) {
   setCls('clock', 'late', tl < 120);
   const esc2 = S.world && S.world.escapeT !== null;
   setText('clockSub', `${Math.floor(tl / 60)}:${String(tl % 60).padStart(2, '0')} until 06:00` + (esc2 ? ' - door closing soon' : ''));
-  if (S.snap) setHtml('team', S.snap.p.map((p) => { const st = p[7]; return `<li class="${st === 'd' ? 'dead' : st === 'e' ? 'out' : ''}">${esc(nameOf(p[0]))}${p[0] === S.id ? '<small>you</small>' : ''}${st === 'c' ? '<small>CAUGHT</small>' : st === 'e' ? '<small>out</small>' : ''}</li>`; }).join(''));
+  if (S.snap) setHtml('team', S.snap.p.map((p) => { const st = p[7]; return `<li class="${st === 'd' ? 'dead' : st === 'e' ? 'out' : ''}">${esc(nameOf(p[0]))}${p[0] === S.id ? '<small>you</small>' : ''}${st === 'c' ? '<small>CAUGHT</small>' : st === 'e' ? '<small>out</small>' : ''}${p[13] ? '<small>reconnecting</small>' : ''}</li>`; }).join(''));
   setStyle($('staminaBar').firstElementChild, 'stamina', 'width', Math.round((S.me.stamina / STAMINA.max) * 100) + '%');
   setStyle($('staminaBar'), 'staminaBar', 'opacity', S.me.stamina < STAMINA.max - 0.05 ? '1' : '0.25');
   setText('modeTxt', S.st !== 'a' ? '' : (S.me.winded ? 'out of breath' : S.me.crouch ? 'crouching - silent' : S.me.mode === 'run' ? 'running - loud' : '') + (S.rescued ? '  /  no second rescue' : ''));
@@ -651,6 +688,7 @@ function frame(now) {
   post.render();
 }
 
+try { const saved = JSON.parse(sessionStorage.getItem('ns_session') || 'null'); if (saved && saved.code === (Q.get('room') || '').toUpperCase()) { S.session = saved; $('name').value = saved.name; setTimeout(() => { sound.init(); reconnect(); }, 300); } } catch {}
 if (!S.quality) S.quality = detectQuality();
 buildScene();
 applyQuality();

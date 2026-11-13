@@ -18,7 +18,7 @@ class Bot {
       this.ws.on('open', () => this.send({ t: 'join', name: this.name, code }));
       this.ws.on('message', (raw) => {
         const m = JSON.parse(raw);
-        if (m.t === 'welcome') { this.id = m.id; this.code = m.code; res(this); }
+        if (m.t === 'welcome') { this.id = m.id; this.code = m.code; this.key = m.key; this.resumed = !!m.resumed; res(this); }
         else if (m.t === 'err') { this.err = m.msg; res(this); }
         else if (m.t === 'lobby') this.lobby = m;
         else if (m.t === 'start') { this.world = m.world; this.x = m.you.x; this.z = m.you.z; this.started = true; this.ended = null; }
@@ -54,7 +54,7 @@ async function party(port, n, diff = 'medium') {
 const closeAll = async (bots) => { bots.forEach((b) => b.close()); await sleep(120); };
 
 async function main() {
-  const srv = await startServer(0, { debug: true });
+  const srv = await startServer(0, { debug: true, grace: 400 }); // short reconnect window so tests run fast
   const port = srv.port;
 
   console.log('\n[1] Lobby and joining');
@@ -88,10 +88,10 @@ async function main() {
     ok(seen, 'other clients receive a player\'s position, facing and movement mode');
     ok(host.snap.g && typeof host.snap.g.x === 'number', 'ghost state is broadcast');
     console.log('\n[3] Disconnects');
-    host.close(); await sleep(150);
+    host.close(); await sleep(700);
     ok(others[0].lobby.host === others[0].id, 'host role passes on when the host leaves');
     ok(others[0].snap.p.length === 4, 'the round continues with the remaining players');
-    await closeAll([...others, sixth, bad, late]);
+    await closeAll([...others, sixth, bad, late]); await sleep(600);
     ok(srv.rooms.size === 0, 'empty rooms are cleaned up');
   }
 
@@ -323,9 +323,30 @@ async function main() {
     }
   }
 
+  console.log('\n[9] Dropped connections');
+  {
+    const [a, b] = await party(port, 2, 'medium');
+    await a.debug('freeze', { on: true });
+    a.pos(12, 11.5, 'walk', 1); await sleep(200);
+    const keep = { id: a.id, key: a.key, code: a.code };
+    a.ws.terminate(); await sleep(150);
+    ok(await b.until(() => { const r = b.snap.p.find((p) => p[0] === keep.id); return r && r[13] === 1; }), 'teammates see the dropped player as "reconnecting"');
+    ok(b.snap.p.length === 2 && b.snap.p.find((p) => p[0] === keep.id)[7] === 'a', 'the dropped player keeps their place in the round');
+    const a2 = new Bot(port, 'Bot1'); a2.started = false;
+    await new Promise((res) => { a2.ws = new WebSocket(`ws://localhost:${port}`); a2.ws.on('open', () => a2.send({ t: 'join', name: 'Bot1', code: keep.code, resume: { id: keep.id, key: keep.key } })); a2.ws.on('message', (raw) => { const m = JSON.parse(raw); if (m.t === 'welcome') { a2.id = m.id; a2.resumed = m.resumed; } else if (m.t === 'start') { a2.started = m; a2.world = m.world; } else if (m.t === 's') a2.snap = m; else if (m.t === 'err') a2.err = m; if (a2.started && a2.snap) res(); }); setTimeout(res, 4000); });
+    ok(a2.resumed && a2.id === keep.id, 'reconnecting with the saved key resumes the same player');
+    ok(a2.started && a2.started.resume && Math.abs(a2.started.you.x - 12) < 0.01, 'the resumed player is back in the same round, in the same spot');
+    ok(await b.until(() => { const r = b.snap.p.find((p) => p[0] === keep.id); return r && r[13] === 0; }), 'teammates see them come back');
+    const bad = await new Promise((res) => { const w = new WebSocket(`ws://localhost:${port}`); w.on('open', () => w.send(JSON.stringify({ t: 'join', name: 'x', code: keep.code, resume: { id: keep.id, key: 'wrong' } }))); w.on('message', (raw) => { const m = JSON.parse(raw); if (m.t === 'err') { w.close(); res(m); } }); });
+    ok(bad.gone, 'a wrong key cannot take over someone else\'s player');
+    const gone = await new Promise((res) => { const w = new WebSocket(`ws://localhost:${port}`); w.on('open', () => w.send(JSON.stringify({ t: 'join', name: 'x', code: 'QQQQ', resume: { id: 1, key: 'k' } }))); w.on('message', (raw) => { const m = JSON.parse(raw); if (m.t === 'err') { w.close(); res(m); } }); });
+    ok(gone.gone && /ended/.test(gone.msg), 'resuming a shift that no longer exists says so');
+    a2.ws.close(); await closeAll([b]);
+  }
+
   srv.close();
 
-  console.log('\n[9] Soak: full rounds simulated at high speed, ghost live, 5 wandering players');
+  console.log('\n[10] Soak: full rounds simulated at high speed, ghost live, 5 wandering players');
   {
     const fakeWs = () => ({ readyState: 1, send() {} });
     for (const diff of ['easy', 'medium', 'hard', 'extreme']) {

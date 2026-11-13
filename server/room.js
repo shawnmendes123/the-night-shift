@@ -13,24 +13,47 @@ const d2 = (a, x, z) => Math.hypot(a.x - x, a.z - z);
 export class Room {
   constructor(code, opts = {}) {
     this.code = code; this.players = new Map(); this.phase = 'lobby'; this.diff = 'medium';
-    this.nextId = 1; this.hostId = null; this.debug = !!opts.debug; this.timer = null; this.onEmpty = opts.onEmpty;
+    this.nextId = 1; this.hostId = null; this.debug = !!opts.debug; this.grace = opts.grace; this.timer = null; this.onEmpty = opts.onEmpty;
   }
-  send(p, msg) { if (p.ws.readyState === 1) p.ws.send(JSON.stringify(msg)); }
-  broadcast(msg) { const s = JSON.stringify(msg); for (const p of this.players.values()) if (p.ws.readyState === 1) p.ws.send(s); }
+  send(p, msg) { if (p.ws && p.ws.readyState === 1) p.ws.send(JSON.stringify(msg)); }
+  broadcast(msg) { const s = JSON.stringify(msg); for (const p of this.players.values()) if (p.ws && p.ws.readyState === 1) p.ws.send(s); }
   ev(e) { this.broadcast({ t: 'ev', ...e }); }
   toast(text, p) { const m = { t: 'ev', k: 'toast', text }; p ? this.send(p, m) : this.broadcast(m); }
 
   add(ws, name) {
     if (this.phase !== 'lobby') return { err: 'A round is in progress. Wait for it to end, then join.' };
     if (this.players.size >= MAX_PLAYERS) return { err: 'This shift is full (5 players).' };
-    const p = { id: this.nextId++, ws, name: String(name || 'Nurse').slice(0, 16).trim() || 'Nurse', x: 0, z: 0, ry: 0, rx: 0, mode: 'still', flash: true, alive: true };
+    const p = { id: this.nextId++, ws, key: Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2), name: String(name || 'Nurse').slice(0, 16).trim() || 'Nurse', x: 0, z: 0, ry: 0, rx: 0, mode: 'still', flash: true, alive: true, offline: false };
     this.players.set(p.id, p);
     if (!this.hostId) this.hostId = p.id;
-    this.send(p, { t: 'welcome', id: p.id, code: this.code, debug: this.debug });
+    this.send(p, { t: 'welcome', id: p.id, key: p.key, code: this.code, debug: this.debug });
     this.sendLobby();
     return { p };
   }
+  // The connection dropped. Keep the player (and their place in the round) for a while so they can reconnect.
+  dropped(p) {
+    if (this.players.get(p.id) !== p) return;
+    p.offline = true; p.mode = 'still'; p.holdBreath = false;
+    clearTimeout(p.dropTimer);
+    p.dropTimer = setTimeout(() => { if (p.offline && this.players.get(p.id) === p) this.remove(p); }, this.grace ?? (this.phase === 'playing' ? 75000 : 12000));
+    clearTimeout(p.sayTimer); p.said = false;
+    p.sayTimer = setTimeout(() => { if (p.offline && this.phase === 'playing' && p.alive && !p.escaped) { p.said = true; this.toast(`${p.name} lost connection. Waiting for them to come back.`); } }, 4000); // ignore quick blips
+    this.sendLobby();
+  }
+  // Same player, new connection: put them back exactly where they were.
+  reattach(ws, p) {
+    clearTimeout(p.dropTimer); clearTimeout(p.sayTimer);
+    if (p.ws && p.ws !== ws) { try { p.ws.terminate ? p.ws.terminate() : p.ws.close(); } catch {} }
+    const was = p.offline; p.ws = ws; p.offline = false;
+    this.send(p, { t: 'welcome', id: p.id, key: p.key, code: this.code, debug: this.debug, resumed: true });
+    this.sendLobby();
+    if (this.phase === 'playing') {
+      this.send(p, { t: 'start', resume: true, diff: this.diff, cfg: { breath: this.cfg.breath, rescue: this.cfg.rescue, time: this.cfg.time }, you: { x: p.x, z: p.z, ry: p.ry }, world: this.world() });
+      if (was && p.said && p.alive && !p.escaped) this.toast(`${p.name} is back.`);
+    } else if (this.phase === 'ended' && this.lastEnd) this.send(p, this.lastEnd);
+  }
   remove(p) {
+    clearTimeout(p.dropTimer);
     this.players.delete(p.id);
     if (this.phase === 'playing' && p.alive && !p.escaped) {
       this.dropItem(p, false);
@@ -43,7 +66,7 @@ export class Room {
     if (this.phase === 'playing') this.checkEnd();
   }
   sendLobby() {
-    this.broadcast({ t: 'lobby', phase: this.phase, diff: this.diff, host: this.hostId, players: [...this.players.values()].map((p) => ({ id: p.id, name: p.name })) });
+    this.broadcast({ t: 'lobby', phase: this.phase, diff: this.diff, host: this.hostId, players: [...this.players.values()].map((p) => ({ id: p.id, name: p.name, offline: !!p.offline })) });
   }
   stop() { if (this.timer) clearInterval(this.timer); this.timer = null; }
 
@@ -94,7 +117,7 @@ export class Room {
     for (const p of this.players.values()) this.send(p, { t: 'start', seed, diff: this.diff, cfg: { breath: cfg.breath, rescue: cfg.rescue, time: cfg.time }, you: { x: p.x, z: p.z, ry: p.ry }, world: this.world() });
     this.sendLobby();
     this.stop();
-    this.timer = setInterval(() => this.tick(TICK), TICK * 1000);
+    this.timer = setInterval(() => { try { this.tick(TICK); } catch (e) { console.error('tick error (round continues)', e); } }, TICK * 1000);
   }
 
   world() {
@@ -182,8 +205,9 @@ export class Room {
   }
   end(win, reason) {
     this.phase = 'ended'; this.stop();
-    this.broadcast({ t: 'end', win, reason, ghost: `${this.ghostName.first} ${this.ghostName.last}`, elapsed: Math.round(this.elapsed), duties: this.tasks.filter((t) => t.done).length, quota: this.quota, mystery: this.mystery,
-      players: [...this.players.values()].map((p) => ({ name: p.name, status: p.escaped ? 'Clocked out' : p.alive ? 'Left behind' : 'Taken' })) });
+    this.lastEnd = { t: 'end', win, reason, ghost: `${this.ghostName.first} ${this.ghostName.last}`, elapsed: Math.round(this.elapsed), duties: this.tasks.filter((t) => t.done).length, quota: this.quota, mystery: this.mystery,
+      players: [...this.players.values()].map((p) => ({ name: p.name, status: p.escaped ? 'Clocked out' : p.alive ? 'Left behind' : 'Taken' })) };
+    this.broadcast(this.lastEnd);
     this.sendLobby();
   }
 
@@ -219,7 +243,7 @@ export class Room {
       t: 's', st: Date.now(), tl: Math.ceil(this.timeLeft),
       g: { x: +g.x.toFixed(2), z: +g.z.toFixed(2), ry: +g.ry.toFixed(2), a: g.anim(), v: +g.vis.toFixed(2), s: g.state, vic: g.victim, spot: g.spot && ['toSpot', 'listen', 'open'].includes(g.state) ? g.spot : null },
       p: [...this.players.values()].map((p) => [p.id, +p.x.toFixed(2), +p.z.toFixed(2), +p.ry.toFixed(2), +p.rx.toFixed(2), p.mode, p.flash ? 1 : 0,
-        p.escaped ? 'e' : !p.alive ? 'd' : p.captured ? 'c' : p.hidden ? 'h' : 'a', p.hidden, +p.breath.toFixed(1), p.holdBreath ? 1 : 0, p.rescuedUsed ? 1 : 0, p.pt || 0]),
+        p.escaped ? 'e' : !p.alive ? 'd' : p.captured ? 'c' : p.hidden ? 'h' : 'a', p.hidden, +p.breath.toFixed(1), p.holdBreath ? 1 : 0, p.rescuedUsed ? 1 : 0, p.pt || 0, p.offline ? 1 : 0]),
     });
   }
 

@@ -63,6 +63,16 @@ try {
   const wall = await ev(a, () => window.NS.S.me.z);
   ok(wall > 10.3, 'the corridor wall stops the player', `z=${wall}`);
 
+  // --- connection drop: the page reconnects by itself and stays in the round
+  const idBefore = await ev(b, () => window.NS.S.id);
+  await ev(b, () => window.NS.S.ws.close());
+  await sleep(300);
+  ok(await ev(b, () => document.getElementById('reconnect').classList.contains('hidden') && window.NS.S.phase === 'game'), 'a quick drop reconnects without covering the screen');
+  await b.waitForFunction(() => window.NS.S.ws && window.NS.S.ws.readyState === 1 && !window.NS.S.recon, null, { timeout: 15000 });
+  ok(await ev(b, () => window.NS.S.phase === 'game' && document.getElementById('reconnect').classList.contains('hidden')), 'it reconnects on its own and stays in the game');
+  ok((await ev(b, () => window.NS.S.id)) === idBefore, 'same player after reconnecting');
+  await sleep(600);
+  ok(await ev(a, (id) => window.NS.S.snap.p.find((p) => p[0] === id)[13] === 0, idBefore), 'the teammate sees them back online');
   // --- scenery screenshots
   await place(a, 3, 11.5, -Math.PI / 2); await place(b, 9, 11.2, -Math.PI / 2 + 0.4);
   await shot(a, '03-corridor-dark');
