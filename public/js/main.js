@@ -24,7 +24,7 @@ const S = {
   st: 'a', spot: null, breath: 0, rescued: 0, spec: null, capT: 0, hideLook: { y: 0, x: 0 },
   g: { x: 0, z: 0, ry: 0, v: 0, a: 'idle', s: 'dormant', speed: 0 }, keys: {}, hold: null, note: false, showEv: false, fade: 0, fadeTo: 0, time: 0, sendT: 0, shake: 0, warn: 0,
 };
-window.NS = { S, THREE };
+window.NS = { S, THREE, herVoice, voiceLive: () => !!voiceBus };
 const snaps = []; // recent server snapshots, for smooth interpolation of other players and the ghost
 
 // ====================================================================== renderer / scene
@@ -230,7 +230,7 @@ if (Q.get('room')) $('code').value = Q.get('room').toUpperCase().slice(0, 4);
 function startRound(m) {
   if (m.resume && S.phase === 'game' && S.cfg) { snaps.length = 0; S.clk = undefined; applyWorld(m.world); return; }
   sound.init();
-  lastSaid = performance.now() - 20000; try { speechSynthesis.getVoices(); } catch {}
+  lastSaid = performance.now() - 20000; loadVoice();
   S.cfg = m.cfg; S.diff = m.diff; S.snap = null; S.spec = null; S.st = 'a'; S.spot = null; S.note = false; S.hold = null; S.capT = 0; S.rescued = 0;
   Object.assign(S.me, { x: m.you.x, z: m.you.z, ry: m.you.ry, rx: 0, crouch: false, flash: true, stamina: STAMINA.max, mode: 'still', winded: false });
   S.g.v = 0; S.g.s = 'dormant';
@@ -293,14 +293,26 @@ const nameOf = (id) => (S.lobby && S.lobby.players.find((p) => p.id === id) || {
 // She speaks your name. Only you hear it: speech plays on your own machine, never your teammates'.
 const myName = () => (S.id && nameOf(S.id) !== 'Someone' ? nameOf(S.id) : $('name').value.trim() || 'nurse').toLowerCase();
 let lastSaid = 0;
-function herVoice(text, vol = 1, rate = 0.55) {
-  try {
-    if (!('speechSynthesis' in window)) return;
-    const u = new SpeechSynthesisUtterance(text); u.pitch = 0.05; u.rate = rate; u.volume = vol;
-    const vs = speechSynthesis.getVoices();
-    const v = vs.find((v) => /^en/i.test(v.lang) && /female|zira|samantha|karen|moira|tessa|fiona|victoria|serena/i.test(v.name)) || vs.find((v) => /^en/i.test(v.lang));
-    if (v) u.voice = v; speechSynthesis.cancel(); speechSynthesis.speak(u); lastSaid = performance.now();
-  } catch {}
+// Her voice: speech generated on this device by meSpeak (GPL, eSpeak), torn into a growl by ghostfx.js, heard from where she is.
+let voiceLoading = null, voiceBus = null;
+const herLines = () => [`i see you, ${myName()}.`, `${myName()}... where are you?`, `${myName()}...`];
+function loadVoice() {
+  if (voiceLoading) return voiceLoading;
+  const add = (src) => new Promise((ok, no) => { const sc = document.createElement('script'); sc.src = src; sc.onload = ok; sc.onerror = no; document.head.appendChild(sc); });
+  voiceLoading = (async () => {
+    if (!window.meSpeak) await add('js/ghostvoice.js');
+    if (!window.GhostVoice) await add('js/ghostfx.js');
+    for (const l of herLines()) { if (sound.ok) await window.GhostVoice.prep(sound.ctx, l).catch(() => {}); await new Promise((r) => setTimeout(r, 40)); }
+  })().catch(() => { voiceLoading = null; });
+  return voiceLoading;
+}
+function hushVoice() { const g = voiceBus; if (!g || !sound.ok) return; voiceBus = null; g.gain.setTargetAtTime(0, sound.ctx.currentTime, 0.02); setTimeout(() => { try { g.disconnect(); } catch {} }, 500); }
+function herVoice(text, vol = 1) {
+  if (!sound.ok || !window.GhostVoice || !window.GhostVoice.ready()) return;
+  hushVoice(); lastSaid = performance.now();
+  const c = sound.ctx, g = c.createGain(); voiceBus = g;
+  g.connect(sound.at(S.g.x, M.floorY(S.g.x, S.g.z) + 1.4, S.g.z, 1.8 * vol)); g.connect(sound.flat(0.55 * vol)); // from her, but always audible
+  window.GhostVoice.say(c, g, text, { vol: 1 }).catch(() => {});
 }
 function scrawlName() { const el = $('nameScrawl'); el.textContent = myName().toUpperCase(); el.classList.remove('show'); void el.offsetWidth; el.classList.add('show'); }
 
@@ -325,15 +337,15 @@ function onEvent(e) {
     case 'shatter': sound.shatter(e.x, fy(e.x, e.z) - 1, e.z); break;
     case 'hide': case 'unhide': if (e.pid !== S.id) sound.creak(e.x, fy(e.x, e.z), e.z); else sound.ui('pick'); break;
     case 'gasp': if (e.pid === S.id) { sound.ui('gasp'); toast('You gasp for air.', 'bad'); } else sound.thud(e.x, fy(e.x, e.z), e.z, 0.6); break;
-    case 'notice': sound.scream(G.x, gy, G.z, 0.9); if (e.pid === S.id) { S.shake = 0.5; sound.sting(); setTimeout(() => herVoice(`i see you, ${myName()}.`, 0.9, 0.6), 1100); } break;
+    case 'notice': sound.scream(G.x, gy, G.z, 0.9); if (e.pid === S.id) { S.shake = 0.5; sound.sting(); setTimeout(() => herVoice(`i see you, ${myName()}.`, 0.9), 1100); } break;
     case 'alert': sound.knock(G.x, gy, G.z); break;
     case 'search': if (S.spot === e.spot) { S.warn = 4; sound.ui('scratch'); } break;
-    case 'listen': if (S.spot === e.spot) { S.warn = 4; toast('She is listening. Hold your breath.', 'bad'); herVoice(`${myName()}... where are you?`, 0.55, 0.5); } break;
+    case 'listen': if (S.spot === e.spot) { S.warn = 4; toast('She is listening. Hold your breath.', 'bad'); herVoice(`${myName()}... where are you?`, 0.6); } break;
     case 'open': { const h = M.hideById(e.spot); sound.creak(h.x, fy(h.x, h.z), h.z, true); break; }
     case 'appear': case 'vanish': sound.buzz(G.x, gy, G.z); break;
     case 'grab':
       sound.grabScream(e.pid === S.id, e.x, fy(e.x, e.z), e.z);
-      if (e.pid === S.id) { S.capT = 0; S.shake = 1.6; S.scare = 1; sound.sting(); S.hold = null; closeNote(); try { speechSynthesis.cancel(); } catch {} scrawlName(); }
+      if (e.pid === S.id) { S.capT = 0; S.shake = 1.6; S.scare = 1; sound.sting(); S.hold = null; closeNote(); hushVoice(); scrawlName(); }
       else toast(`${nameOf(e.pid)} has been caught! Get to them and hold E to pull them free.`, 'bad');
       break;
     case 'drag': S.dragWin = e.win; if (e.pid === S.id) toast(e.win > 1.3 ? 'She is dragging you away. A teammate can still pull you free.' : 'She is dragging you away.', 'bad'); break;
@@ -687,7 +699,7 @@ function frame(now) {
     updateHud(dt, t);
     perfTick(dt);
     // When she is near but has not found you, she sometimes whispers your name. Rarely, so it stays frightening.
-    if ((S.st === 'a' || S.st === 'h') && G.v > 0.3 && cam.gd < 12 && !['chase', 'notice', 'grab', 'drag', 'take'].includes(G.s) && now - lastSaid > 45000 && Math.random() < dt / 25) herVoice(myName() + '...', 0.45, 0.45);
+    if ((S.st === 'a' || S.st === 'h') && G.v > 0.3 && cam.gd < 12 && !['chase', 'notice', 'grab', 'drag', 'take'].includes(G.s) && now - lastSaid > 45000 && Math.random() < dt / 25) herVoice(myName() + '...', 0.5);
   } else {
     // menu backdrop: drifting down the dark corridor
     const a = t * 0.05;

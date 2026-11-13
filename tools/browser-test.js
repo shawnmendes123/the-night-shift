@@ -49,6 +49,9 @@ try {
   await a.waitForFunction(() => window.NS.S.snap); await b.waitForFunction(() => window.NS.S.snap);
   await dbg(a, 'freeze', { on: true });
   ok(true, 'round started in both browsers');
+  await a.waitForFunction(() => window.GhostVoice && window.GhostVoice.ready(), null, { timeout: 30000 });
+  const voice = await ev(a, async () => { window.NS.herVoice('test... where are you?', 0.01); await new Promise((r) => setTimeout(r, 1500)); return { live: window.NS.voiceLive() }; });
+  ok(voice.live, 'her voice engine loads after the round starts and speaks without errors');
 
   // --- movement with real key presses, seen from the other browser
   await place(a, 4, 15, Math.PI); await place(b, 4, 19, Math.PI); await sleep(600);
