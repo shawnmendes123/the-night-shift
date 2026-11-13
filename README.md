@@ -64,3 +64,19 @@ Difficulty changes the numbers only (quota, time, her speed and senses, how many
 - Player movement is trusted by the server (fine for friends, not cheat-proof).
 - One map, one ghost. No saved progress, no reconnect into a running round.
 - "Low" graphics turns off shadows and post-processing for weak laptops.
+
+## Voice chat
+
+Proximity voice is built in. Pick **Open mic** or **Push to talk (V)** on the sign-in sheet; the browser asks for the microphone once.
+On the sign-in sheet everyone hears everyone. In the hospital voices come from where each nurse stands, fade with distance, go muffled through walls, and the ghost hears talking. Taken nurses hear the living but cannot be heard by them. Holding your breath while hiding mutes your mic.
+
+Audio goes directly between players (WebRTC); the server only passes the handshake along. Most home networks work with the built-in free STUN servers.
+Some strict networks (some mobile data, university or office Wi-Fi) block direct connections. For those, add a TURN relay on Render under **Environment**:
+
+```
+TURN_URL=turn:your-turn-host:3478,turns:your-turn-host:443
+TURN_USER=...
+TURN_PASS=...
+```
+
+Run `node tools/voice-test.js` (needs Playwright and Chrome) to test voice with two browsers and fake microphones.

@@ -8,6 +8,6 @@ export const DIFF = {
 export const SPEED = { crouch: 1.4, walk: 2.7, run: 5.2 };
 export const STAMINA = { max: 6, regen: 0.6 };
 // How far each kind of noise carries (metres, before walls and difficulty).
-export const LOUD = { run: 11, walk: 4, door: 5, drop: 6, bottleDrop: 8, shatter: 18, work: 9, breaker: 20, gasp: 9, call: 10, hide: 3, wrong: 60, pickup: 2 };
+export const LOUD = { run: 11, walk: 4, door: 5, drop: 6, bottleDrop: 8, shatter: 18, work: 9, breaker: 20, gasp: 9, call: 10, hide: 3, wrong: 60, pickup: 2, talk: 6, shout: 12 };
 export const MAX_PLAYERS = 5;
 export const REACH = 2.1;

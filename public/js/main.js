@@ -8,6 +8,7 @@ import { Avatar } from './avatar.js';
 import { Sound } from './audio.js';
 import { makePost } from './post.js';
 import { FloorPlan } from './plan.js';
+import { Voice } from './voice.js';
 
 const $ = (id) => document.getElementById(id);
 const Q = new URLSearchParams(location.search);
@@ -25,7 +26,8 @@ const S = {
   mapOpen: false, track: null, st: 'a', spot: null, breath: 0, rescued: 0, spec: null, capT: 0, hideLook: { y: 0, x: 0 },
   g: { x: 0, z: 0, ry: 0, v: 0, a: 'idle', s: 'dormant', speed: 0 }, keys: {}, hold: null, note: false, showEv: false, fade: 0, fadeTo: 0, time: 0, sendT: 0, shake: 0, warn: 0,
 };
-window.NS = { S, THREE, herVoice, voiceLive: () => !!voiceBus, goals: () => goals(), openMap: (on) => openMap(on, true), track: (id) => setTrack(id), route: () => route };
+const voice = new Voice((m) => send(m));
+window.NS = { S, THREE, voice, herVoice, voiceLive: () => !!voiceBus, goals: () => goals(), openMap: (on) => openMap(on, true), track: (id) => setTrack(id), route: () => route };
 const snaps = []; // recent server snapshots, for smooth interpolation of other players and the ghost
 
 // ====================================================================== renderer / scene
@@ -125,7 +127,8 @@ function connect(code) {
   const name = $('name').value.trim() || 'Nurse';
   localStorage.setItem('ns_name', name);
   $('menuErr').textContent = '';
-  sound.init();
+  sound.init(); voice.attach(sound.ctx);
+  try { const v = localStorage.getItem('ns_voice'); if (v && v !== 'off' && voice.mode === 'off') voice.setMode(v).then(renderVoice); } catch {}
   S.session = null; setSession(null);
   openSocket({ t: 'join', name, code });
 }
@@ -174,8 +177,9 @@ window.NS.send = send;
 function onMsg(m) {
   switch (m.t) {
     case 'err': if (S.recon || m.gone) { giveUp(m.msg); break; } $('menuErr').textContent = m.msg; S.ws && S.ws.close(); break;
-    case 'welcome': S.id = m.id; S.code = m.code; S.debug = m.debug; S.session = { code: m.code, id: m.id, key: m.key, name: $('name').value.trim() || (S.session && S.session.name) || 'Nurse' }; setSession(S.session); if (m.resumed) { const long = S.recon && performance.now() - S.recon.t0 > 1500; reconnected(); if (S.phase === 'game' && long) toast('Reconnected.'); } history.replaceState(null, '', '?room=' + m.code + (NOLOCK ? '&nolock' : '')); break;
-    case 'lobby': S.lobby = m; S.diff = m.diff; if (m.phase === 'lobby' && S.phase !== 'lobby') show('lobby'); renderLobby(); if (S.phase === 'end') renderEndButtons(); break;
+    case 'rtc': voice.signal(m.from, m.data); break;
+    case 'welcome': voice.setIce(m.ice); voice.attach(sound.ctx); if (voice.mode !== 'off') setTimeout(() => send({ t: 'mic', on: true }), 0); S.id = m.id; S.code = m.code; S.debug = m.debug; S.session = { code: m.code, id: m.id, key: m.key, name: $('name').value.trim() || (S.session && S.session.name) || 'Nurse' }; setSession(S.session); if (m.resumed) { const long = S.recon && performance.now() - S.recon.t0 > 1500; reconnected(); if (S.phase === 'game' && long) toast('Reconnected.'); } history.replaceState(null, '', '?room=' + m.code + (NOLOCK ? '&nolock' : '')); break;
+    case 'lobby': S.lobby = m; S.diff = m.diff; voice.sync(S.id, m.players.map((p) => p.id)); if (m.phase === 'lobby' && S.phase !== 'lobby') show('lobby'); renderLobby(); if (S.phase === 'end') renderEndButtons(); break;
     case 'start': startRound(m); break;
     case 'world': applyWorld(m.world); break;
     case 's': {
@@ -204,7 +208,7 @@ function renderLobby() {
   const host = L.host === S.id;
   $('lobbyCode').textContent = S.code;
   $('lobbyLink').textContent = location.origin + '/?room=' + S.code;
-  $('roster').innerHTML = L.players.map((p) => `<li>${esc(p.name)}${p.id === L.host ? '<span class="tag">charge nurse (host)</span>' : ''}${p.id === S.id ? '<span class="tag">you</span>' : ''}${p.offline ? '<span class="tag">reconnecting</span>' : ''}</li>`).join('');
+  $('roster').innerHTML = L.players.map((p) => `<li data-id="${esc(p.id)}">${esc(p.name)}${p.mic ? '<span class="tag mic">mic</span>' : ''}${p.id === L.host ? '<span class="tag">charge nurse (host)</span>' : ''}${p.id === S.id ? '<span class="tag">you</span>' : ''}${p.offline ? '<span class="tag">reconnecting</span>' : ''}</li>`).join('');
   $('diffs').innerHTML = Object.entries(DIFF).map(([k, d]) => `<button data-d="${k}" class="${k === L.diff ? 'on' : ''}" ${host ? '' : 'disabled'}>${d.label}</button>`).join('');
   const d = DIFF[L.diff];
   $('diffNote').textContent = `${d.quota} of 6 duties, ${Math.round(d.time / 60)} minutes, ${d.rescue}s to pull a caught teammate free${d.jammed ? `, ${Math.round(d.jammed * 100)}% of hiding spots jammed` : ''}.`;
@@ -230,7 +234,7 @@ if (Q.get('room')) $('code').value = Q.get('room').toUpperCase().slice(0, 4);
 // ====================================================================== round start / end
 function startRound(m) {
   if (m.resume && S.phase === 'game' && S.cfg) { snaps.length = 0; S.clk = undefined; applyWorld(m.world); return; }
-  sound.init();
+  sound.init(); voice.attach(sound.ctx);
   lastSaid = performance.now() - 20000; loadVoice();
   S.cfg = m.cfg; S.diff = m.diff; S.snap = null; S.spec = null; S.st = 'a'; S.spot = null; S.note = false; S.hold = null; S.capT = 0; S.rescued = 0; S.track = null; route = null; openMap(false, true);
   Object.assign(S.me, { x: m.you.x, z: m.you.z, ry: m.you.ry, rx: 0, crouch: false, flash: true, stamina: STAMINA.max, mode: 'still', winded: false });
@@ -370,6 +374,53 @@ function onEvent(e) {
   }
 }
 
+
+
+// ====================================================================== voice chat
+let voiceT = 0, talkSent = 0, voiceView = { spatial: false, alive: true, peers: {} };
+function renderVoice() {
+  for (const b of $('voiceModes').children) b.classList.toggle('on', b.dataset.v === voice.mode);
+  $('voiceNote').textContent = voice.error || { off: 'Your mic is off. You can still hear everyone with a mic.', open: 'Open mic. In the hospital your voice carries, and she can hear it too.', ptt: 'Hold V to talk. In the hospital she can hear you too.' }[voice.mode];
+  $('micHud').dataset.mode = voice.mode;
+}
+$('voiceModes').addEventListener('click', async (e) => {
+  const v = e.target.dataset.v; if (!v) return;
+  sound.init(); voice.attach(sound.ctx);
+  $('voiceNote').textContent = v === 'off' ? '' : 'Asking for your microphone...';
+  const ok = await voice.setMode(v);
+  try { localStorage.setItem('ns_voice', ok ? v : 'off'); } catch {}
+  renderVoice();
+});
+$('vvol').value = +(localStorage.getItem('ns_vvol') || 1); voice.setVolume(+$('vvol').value); $('vvolVal').textContent = Math.round($('vvol').value * 100) + '%';
+$('vvol').addEventListener('input', (e) => { voice.setVolume(+e.target.value); $('vvolVal').textContent = Math.round(e.target.value * 100) + '%'; try { localStorage.setItem('ns_vvol', e.target.value); } catch {} });
+const typing = (e) => e.target instanceof HTMLInputElement && e.target.type !== 'range';
+document.addEventListener('keydown', (e) => { if (e.code === 'KeyV' && !typing(e)) voice.hold = true; });
+document.addEventListener('keyup', (e) => { if (e.code === 'KeyV') voice.hold = false; });
+window.addEventListener('blur', () => { voice.hold = false; });
+renderVoice();
+function voiceTick(now) {
+  voice.forceMute = S.phase === 'game' && S.st === 'h' && !!S.keys.Space; // holding your breath mutes you
+  if (now - voiceT > 150) {
+    voiceT = now;
+    const spatial = S.phase === 'game' && !!S.snap, peers = {};
+    if (spatial) {
+      const lx = camera.position.x, lz = camera.position.z, doors = sound.doors || {};
+      for (const p of S.snap.p) {
+        if (p[0] === S.id) continue;
+        const q = posOf(p[0]) || { x: p[1], z: p[2] }, alive = p[7] === 'a' || p[7] === 'h' || p[7] === 'c';
+        peers[p[0]] = { x: q.x, y: M.floorY(q.x, q.z) + 1.5, z: q.z, alive, blocked: p[7] === 'h' || !M.lineOfSight(lx, lz, q.x, q.z, doors) };
+      }
+    }
+    voiceView = { spatial, alive: S.st === 'a' || S.st === 'h' || S.st === 'c', peers };
+    // speaking marks on the sign-in sheet
+    if (S.phase === 'lobby') for (const li of $('roster').children) li.classList.toggle('talk', +li.dataset.id === S.id ? voice.speaking : voice.talking(li.dataset.id));
+    setStyle($('micMeter').firstElementChild, 'micMeter', 'width', Math.min(100, Math.round(voice.level * 600)) + '%');
+    $('micHud').classList.toggle('live', voice.speaking);
+    $('micHud').textContent = voice.mode === 'off' ? '' : voice.forceMute ? 'mic muted - holding breath' : voice.mode === 'ptt' ? (voice.hold ? 'talking' : 'hold V to talk') : 'mic open';
+  }
+  voice.update(voiceView);
+  if (S.phase === 'game' && (S.st === 'a' || S.st === 'h') && voice.speaking && now - talkSent > 450) { talkSent = now; send({ t: 'voice', loud: voice.level > 0.16 ? 1 : 0 }); }
+}
 
 // ====================================================================== floor plan (M)
 // A fire-evacuation plan of the hospital: you, your team, every unfinished job, and the route to the one you track.
@@ -707,7 +758,7 @@ function updateHud(dt, t) {
   setCls('clock', 'late', tl < 120);
   const esc2 = S.world && S.world.escapeT !== null;
   setText('clockSub', `${Math.floor(tl / 60)}:${String(tl % 60).padStart(2, '0')} until 06:00` + (esc2 ? ' - door closing soon' : ''));
-  if (S.snap) setHtml('team', S.snap.p.map((p) => { const st = p[7]; return `<li class="${st === 'd' ? 'dead' : st === 'e' ? 'out' : ''}">${esc(nameOf(p[0]))}${p[0] === S.id ? '<small>you</small>' : ''}${st === 'c' ? '<small>CAUGHT</small>' : st === 'e' ? '<small>out</small>' : ''}${p[13] ? '<small>reconnecting</small>' : ''}</li>`; }).join(''));
+  if (S.snap) setHtml('team', S.snap.p.map((p) => { const st = p[7]; return `<li class="${st === 'd' ? 'dead' : st === 'e' ? 'out' : ''}${(p[0] === S.id ? voice.speaking : voice.talking(p[0])) ? ' talk' : ''}">${esc(nameOf(p[0]))}${p[0] === S.id ? '<small>you</small>' : ''}${st === 'c' ? '<small>CAUGHT</small>' : st === 'e' ? '<small>out</small>' : ''}${p[13] ? '<small>reconnecting</small>' : ''}</li>`; }).join(''));
   setStyle($('staminaBar').firstElementChild, 'stamina', 'width', Math.round((S.me.stamina / STAMINA.max) * 100) + '%');
   setStyle($('staminaBar'), 'staminaBar', 'opacity', S.me.stamina < STAMINA.max - 0.05 ? '1' : '0.25');
   setText('modeTxt', S.st !== 'a' ? '' : (S.me.winded ? 'out of breath' : S.me.crouch ? 'crouching - silent' : S.me.mode === 'run' ? 'running - loud' : '') + (S.rescued ? '  /  no second rescue' : ''));
@@ -770,6 +821,7 @@ function viewSnap(now) {
 function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.1, (now - last) / 1000); last = now; S.time += dt;
+  voiceTick(now);
   const t = S.time;
   let cam;
   if (S.phase === 'game' && S.snap) {

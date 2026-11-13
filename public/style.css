@@ -76,8 +76,8 @@ summary { cursor: pointer; text-transform: uppercase; letter-spacing: .12em; fon
 #team .out { color: #7fbf8a; }
 #team small { color: #8a978c; margin-left: 6px; }
 #fps { position: absolute; right: 20px; bottom: 16px; font-size: 11px; letter-spacing: .1em; color: #8fa092; }
-#sens { width: 100%; margin-top: 8px; accent-color: var(--ink); border: 0; padding: 0; }
-#sens:focus-visible { outline: 3px solid var(--alarm); outline-offset: 2px; }
+#sens, #vvol { width: 100%; margin-top: 8px; accent-color: var(--ink); border: 0; padding: 0; }
+#sens:focus-visible, #vvol:focus-visible { outline: 3px solid var(--alarm); outline-offset: 2px; }
 #cross { position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px; background: rgba(230, 240, 230, .55); border-radius: 50%; }
 #prompt { position: absolute; left: 50%; bottom: 20%; transform: translateX(-50%); text-align: center; font-size: 15px; color: #e8efe6; min-width: 200px; }
 #prompt b { display: inline-block; border: 1.5px solid #e8efe6; padding: 0 6px; margin-right: 8px; font-weight: 700; }
@@ -153,3 +153,17 @@ summary { cursor: pointer; text-transform: uppercase; letter-spacing: .12em; fon
 .lg.base { background: #c9c4b1; border: 1px solid var(--rule); }
 @media (max-width: 760px) { .planBody { grid-template-columns: 1fr; } .planSide { max-height: 34vh; } #planCanvas { max-height: 52vh; } }
 #planList button { text-transform: none; letter-spacing: 0; font-family: var(--type); }
+
+/* voice chat */
+.vrow { display: flex; align-items: center; gap: 12px; margin-top: 8px; text-transform: none; letter-spacing: 0; }
+.vrow .fine { margin: 0; }
+#micMeter { flex: none; width: 90px; height: 8px; border: 1px solid var(--ink-soft); }
+#micMeter i { display: block; height: 100%; width: 0; background: var(--ink); transition: width .1s; }
+#roster .tag.mic { color: var(--sick); }
+#roster li.talk { color: var(--alarm); }
+#roster li.talk::after { content: " \25CF"; color: var(--alarm); font-size: 12px; vertical-align: 2px; }
+#team li.talk { color: #f1e9d8; }
+#team li.talk::before { content: "\25CF  "; color: #d8322a; font-size: 10px; vertical-align: 1px; }
+#micHud { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: #8e978d; margin-top: 4px; }
+#micHud.live { color: #e8d9c8; }
+#micHud.live::before { content: "\25CF  "; color: #d8322a; }

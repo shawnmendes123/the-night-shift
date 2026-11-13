@@ -3,6 +3,10 @@ import { DIFF, LOUD, MAX_PLAYERS, REACH } from '../shared/config.js';
 import * as M from '../shared/map.js';
 import { Nav } from '../shared/nav.js';
 import { Ghost } from './ghost.js';
+// Voice chat connection helpers. STUN is free; a TURN relay (set TURN_URL, TURN_USER, TURN_PASS) lets voice
+// through strict networks that block direct peer-to-peer audio.
+const ICE = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
+if (process.env.TURN_URL) ICE.push({ urls: process.env.TURN_URL.split(',').map((u) => u.trim()), username: process.env.TURN_USER || '', credential: process.env.TURN_PASS || '' });
 
 const TICK = 1 / 20;
 const SURNAMES = ['Marrow', 'Quill', 'Feld', 'Calder', 'Voss', 'Hale', 'Brandt', 'Lowe'];
@@ -26,7 +30,7 @@ export class Room {
     const p = { id: this.nextId++, ws, key: Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2), name: String(name || 'Nurse').slice(0, 16).trim() || 'Nurse', x: 0, z: 0, ry: 0, rx: 0, mode: 'still', flash: true, alive: true, offline: false };
     this.players.set(p.id, p);
     if (!this.hostId) this.hostId = p.id;
-    this.send(p, { t: 'welcome', id: p.id, key: p.key, code: this.code, debug: this.debug });
+    this.send(p, { t: 'welcome', id: p.id, key: p.key, code: this.code, debug: this.debug, ice: ICE });
     this.sendLobby();
     return { p };
   }
@@ -45,7 +49,7 @@ export class Room {
     clearTimeout(p.dropTimer); clearTimeout(p.sayTimer);
     if (p.ws && p.ws !== ws) { try { p.ws.terminate ? p.ws.terminate() : p.ws.close(); } catch {} }
     const was = p.offline; p.ws = ws; p.offline = false;
-    this.send(p, { t: 'welcome', id: p.id, key: p.key, code: this.code, debug: this.debug, resumed: true });
+    this.send(p, { t: 'welcome', id: p.id, key: p.key, code: this.code, debug: this.debug, resumed: true, ice: ICE });
     this.sendLobby();
     if (this.phase === 'playing') {
       this.send(p, { t: 'start', resume: true, diff: this.diff, cfg: { breath: this.cfg.breath, rescue: this.cfg.rescue, time: this.cfg.time }, you: { x: p.x, z: p.z, ry: p.ry }, world: this.world() });
@@ -66,7 +70,7 @@ export class Room {
     if (this.phase === 'playing') this.checkEnd();
   }
   sendLobby() {
-    this.broadcast({ t: 'lobby', phase: this.phase, diff: this.diff, host: this.hostId, players: [...this.players.values()].map((p) => ({ id: p.id, name: p.name, offline: !!p.offline })) });
+    this.broadcast({ t: 'lobby', phase: this.phase, diff: this.diff, host: this.hostId, players: [...this.players.values()].map((p) => ({ id: p.id, name: p.name, offline: !!p.offline, mic: !!p.mic })) });
   }
   stop() { if (this.timer) clearInterval(this.timer); this.timer = null; }
 
@@ -271,6 +275,15 @@ export class Room {
   // ---------------------------------------------------------------- messages
   onMessage(p, m) {
     if (m.t === 'ping') return this.send(p, { t: 'pong', n: m.n });
+    // voice chat: the server only passes the peer-to-peer handshake along, inside this room
+    if (m.t === 'rtc') {
+      const q = this.players.get(m.to), now = Date.now();
+      if (!q || q === p || !m.data || typeof m.data !== 'object') return;
+      p.rtcN = now - (p.rtcT || 0) > 1000 ? 1 : (p.rtcN || 0) + 1; if (p.rtcN === 1) p.rtcT = now;
+      if (p.rtcN > 80 || JSON.stringify(m.data).length > 12000) return;
+      return this.send(q, { t: 'rtc', from: p.id, data: m.data });
+    }
+    if (m.t === 'mic') { if (!!m.on !== !!p.mic) { p.mic = !!m.on; this.sendLobby(); } return; }
     if (this.phase === 'lobby') {
       if (m.t === 'diff' && p.id === this.hostId && DIFF[m.diff]) { this.diff = m.diff; this.sendLobby(); }
       else if (m.t === 'name') { p.name = String(m.name || '').slice(0, 16).trim() || p.name; this.sendLobby(); }
@@ -287,6 +300,9 @@ export class Room {
         p.ry = +m.ry || 0; p.rx = +m.rx || 0; p.flash = !!m.f;
         break;
       case 'breath': p.holdBreath = !!m.h && !!p.hidden && p.gasp <= 0 && p.breath > 0.2; break;
+      case 'voice': // she hears you talk, hiding or not
+        if (this.elapsed - (p.voiceT ?? -9) > 0.45) { p.voiceT = this.elapsed; p.lastTalk = this.elapsed; this.noise(p.x, p.z, m.loud ? LOUD.shout : LOUD.talk, p); }
+        break;
       case 'noise': if (!p.hidden && this.elapsed - p.workT > 0.6) { p.workT = this.elapsed; this.noise(p.x, p.z, LOUD.work, p); } break;
       case 'drop': if (!p.hidden) this.dropItem(p); break;
       case 'throw': {

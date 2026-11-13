@@ -291,6 +291,7 @@ export class Ghost {
         if (nearest) return this.onSight(nearest, false);
         const occ = [...r.players.values()].find((p) => p.alive && p.hidden === this.spot);
         if (occ && !occ.holdBreath && this.st > cfg.listen * 0.4) this.found = true; // she heard breathing
+        if (occ && this.r.elapsed - (occ.lastTalk ?? -9) < 1) this.found = true; // she heard talking
         if (this.st > cfg.listen) {
           if (this.found) { this.set('open'); r.ev({ k: 'open', spot: this.spot }); }
           else { if (heard) return this.investigate(heard); this.nextSearch(); }
